@@ -346,6 +346,12 @@ export function getWikiDraft(id: string) {
   return row ? draftFromRow(row) : null
 }
 
+export function getWikiDrafts(ids: string[]) {
+  return ids
+    .map((id) => getWikiDraft(id))
+    .filter((draft): draft is WikiDraft => Boolean(draft))
+}
+
 export function listWikiDrafts(limit = 200) {
   const db = ensureDb()
   const rows = db.prepare(`
@@ -413,4 +419,12 @@ export function updateWikiDraftStatus(id: string, status: WikiDraftStatus, notio
     WHERE id = ?
   `).run(status, notionPageId ?? null, nowIso(), id)
   return getWikiDraft(id)
+}
+
+export function deleteWikiDrafts(ids: string[]) {
+  if (ids.length === 0) return 0
+  const db = ensureDb()
+  const placeholders = ids.map(() => '?').join(', ')
+  const result = db.prepare(`DELETE FROM wiki_drafts WHERE id IN (${placeholders})`).run(...ids)
+  return result.changes
 }

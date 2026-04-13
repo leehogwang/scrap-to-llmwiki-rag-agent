@@ -304,25 +304,25 @@ export async function publishWikiDraftToNotion(draft: WikiDraft, scraps: Scrap[]
 
   const children: BlockObjectRequest[] = [
     paragraphBlock(draft.summary),
-    headingBlock('Key concepts', 2),
-    ...(draft.keyConcepts.length > 0 ? draft.keyConcepts.map((item) => bulletedBlock(item)) : [paragraphBlock('(No concepts)')]),
-    headingBlock('Claims and notes', 2),
+    headingBlock('핵심 개념', 2),
+    ...(draft.keyConcepts.length > 0 ? draft.keyConcepts.map((item) => bulletedBlock(item)) : [paragraphBlock('(추출된 개념이 없습니다)')]),
+    headingBlock('주요 주장과 메모', 2),
     ...(draft.claims.length > 0
       ? draft.claims.flatMap((claim) => [
           bulletedBlock(`${claim.claim} [${claim.supportLevel}]`),
-          ...claim.evidence.slice(0, 3).map((evidence) => paragraphBlock(`Evidence: ${evidence}`))
+          ...claim.evidence.slice(0, 3).map((evidence) => paragraphBlock(`근거: ${evidence}`))
         ])
-      : [paragraphBlock('(No claim analysis)')]),
+      : [paragraphBlock('(정리된 주장 분석이 없습니다)')]),
     ...draft.sections.flatMap((section) => [
       headingBlock(section.heading, 2),
       ...section.paragraphs.map((paragraph) => paragraphBlock(paragraph)),
       ...section.bullets.map((bullet) => bulletedBlock(bullet))
     ]),
-    headingBlock('Open questions', 2),
-    ...(draft.openQuestions.length > 0 ? draft.openQuestions.map((item) => bulletedBlock(item)) : [paragraphBlock('(No open questions)')]),
-    headingBlock('Related scraps', 2),
+    headingBlock('열린 질문', 2),
+    ...(draft.openQuestions.length > 0 ? draft.openQuestions.map((item) => bulletedBlock(item)) : [paragraphBlock('(열린 질문이 없습니다)')]),
+    headingBlock('연결된 스크랩', 2),
     ...scraps.map((scrap) => bulletedBlock(`${scrap.title} — ${scrap.sourceUrl}`)),
-    headingBlock('Source links', 2),
+    headingBlock('출처 링크', 2),
     ...draft.sourceLinks.map((source) => bulletedBlock(`${source.title} — ${source.url}`))
   ]
 
