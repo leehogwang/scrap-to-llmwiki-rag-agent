@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ClipWiki Capture",
+  "version": "0.1.0",
+  "description": "Hold Alt and drag to save a visible region as a Notion-backed study scrap.",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "ClipWiki Capture"
+  }
+}
