@@ -28,6 +28,10 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 
 ## 데모 자산
 
+### GIF
+
+![ClipWiki 데모](./docs/demo/clipwiki-demo.gif)
+
 ### 스크린샷
 
 - [대시보드](./docs/screenshots/01-dashboard-home.png)
@@ -36,6 +40,7 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 
 ### 영상
 
+- [clipwiki-demo.gif](./docs/demo/clipwiki-demo.gif)
 - [clipwiki-demo.webm](./docs/demo/clipwiki-demo.webm)
 
 ## 동작 방식

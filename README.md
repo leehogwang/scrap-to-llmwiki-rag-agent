@@ -35,6 +35,10 @@ The system follows a bounded agent pattern:
 
 ## Demo
 
+### Animated demo
+
+![ClipWiki demo](./docs/demo/clipwiki-demo.gif)
+
 ### Screenshots
 
 ![Dashboard workspace](./docs/screenshots/01-dashboard-home.png)
@@ -45,6 +49,7 @@ The system follows a bounded agent pattern:
 
 ### Video
 
+- [clipwiki-demo.gif](./docs/demo/clipwiki-demo.gif)
 - [clipwiki-demo.webm](./docs/demo/clipwiki-demo.webm)
 
 ## How It Works
