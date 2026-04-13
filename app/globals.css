@@ -1,15 +1,21 @@
+@import '@xyflow/react/dist/style.css';
+
 :root {
   color-scheme: dark;
-  --bg: #0b1020;
-  --panel: #11182d;
-  --panel-2: #16203a;
-  --border: #233250;
-  --text: #e8eefc;
-  --muted: #94a3c7;
-  --accent: #67e8f9;
-  --accent-2: #a78bfa;
-  --danger: #fb7185;
-  --success: #34d399;
+  --bg: #111315;
+  --panel: #171a1e;
+  --panel-2: #1d2126;
+  --border: #2b3138;
+  --text: #eef1f4;
+  --muted: #a4adb8;
+  --accent: #7f93a8;
+  --accent-2: #b8aa96;
+  --danger: #d27f8d;
+  --success: #7fa892;
+  --accent-rgb: 127, 147, 168;
+  --accent-2-rgb: 184, 170, 150;
+  --danger-rgb: 210, 127, 141;
+  --success-rgb: 127, 168, 146;
 }
 
 * {
@@ -21,9 +27,9 @@ html, body {
   min-height: 100%;
   height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(103, 232, 249, 0.16), transparent 32%),
-    radial-gradient(circle at top right, rgba(167, 139, 250, 0.18), transparent 28%),
-    linear-gradient(180deg, #0b1020 0%, #0f1730 100%);
+    radial-gradient(circle at top left, rgba(var(--accent-rgb), 0.11), transparent 32%),
+    radial-gradient(circle at top right, rgba(var(--accent-2-rgb), 0.12), transparent 28%),
+    linear-gradient(180deg, #111315 0%, #15191d 100%);
   color: var(--text);
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
@@ -55,7 +61,7 @@ button:active:not(:disabled) {
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(103, 232, 249, 0.55);
+  outline: 2px solid rgba(var(--accent-rgb), 0.5);
   outline-offset: 2px;
 }
 
@@ -79,7 +85,7 @@ a {
 
 .panel {
   border-right: 1px solid var(--border);
-  background: rgba(17, 24, 45, 0.92);
+  background: rgba(23, 26, 30, 0.94);
   backdrop-filter: blur(16px);
   min-height: 0;
   min-width: 0;
@@ -100,7 +106,7 @@ a {
 
 .section {
   padding: 18px;
-  border-bottom: 1px solid rgba(35, 50, 80, 0.9);
+  border-bottom: 1px solid rgba(43, 49, 56, 0.92);
 }
 
 .left-panel .section {
@@ -136,34 +142,34 @@ a {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 8px 12px;
-  background: rgba(22, 32, 58, 0.9);
+  background: rgba(29, 33, 38, 0.92);
   color: var(--text);
   font-weight: 600;
 }
 
 .chip.active, .tab.active {
-  border-color: rgba(103, 232, 249, 0.45);
-  box-shadow: 0 0 0 1px rgba(103, 232, 249, 0.15);
-  background: linear-gradient(135deg, rgba(103, 232, 249, 0.22), rgba(45, 212, 191, 0.14));
+  border-color: rgba(var(--accent-rgb), 0.45);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.14);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-2-rgb), 0.14));
 }
 
 .action-button.primary {
-  background: linear-gradient(135deg, rgba(103, 232, 249, 0.22), rgba(167, 139, 250, 0.22));
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-2-rgb), 0.22));
 }
 
 .action-button.strong {
-  border-color: rgba(103, 232, 249, 0.45);
-  box-shadow: 0 10px 24px rgba(103, 232, 249, 0.16);
+  border-color: rgba(var(--accent-rgb), 0.42);
+  box-shadow: 0 10px 24px rgba(8, 12, 16, 0.22);
 }
 
 .action-button.success {
-  border-color: rgba(52, 211, 153, 0.55);
-  color: #d1fae5;
+  border-color: rgba(var(--success-rgb), 0.5);
+  color: #e6f2ea;
 }
 
 .action-button.danger {
-  border-color: rgba(251, 113, 133, 0.5);
-  color: #ffe4e6;
+  border-color: rgba(var(--danger-rgb), 0.48);
+  color: #f6e7ea;
 }
 
 .stack {
@@ -177,7 +183,7 @@ a {
   border-radius: 14px;
   padding: 12px 14px;
   color: var(--text);
-  background: rgba(12, 18, 35, 0.92);
+  background: rgba(18, 20, 23, 0.94);
 }
 
 .textarea {
@@ -198,7 +204,7 @@ a {
   border-bottom: 1px solid var(--border);
   display: grid;
   gap: 14px;
-  background: rgba(12, 18, 35, 0.3);
+  background: rgba(18, 20, 23, 0.38);
   position: sticky;
   top: 0;
   z-index: 5;
@@ -250,8 +256,8 @@ a {
   gap: 4px;
   padding: 8px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(103, 232, 249, 0.18);
-  background: linear-gradient(135deg, rgba(22, 32, 58, 0.96), rgba(11, 16, 32, 0.88));
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  background: linear-gradient(135deg, rgba(29, 33, 38, 0.96), rgba(17, 19, 21, 0.9));
   margin: 0 auto;
   min-width: 220px;
 }
@@ -263,8 +269,8 @@ a {
   justify-content: space-between;
   padding: 12px 14px;
   border-radius: 18px;
-  border: 1px solid rgba(103, 232, 249, 0.16);
-  background: linear-gradient(135deg, rgba(22, 32, 58, 0.96), rgba(11, 16, 32, 0.88));
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: linear-gradient(135deg, rgba(29, 33, 38, 0.96), rgba(17, 19, 21, 0.9));
 }
 
 .selection-summary {
@@ -296,22 +302,22 @@ a {
   border: 1px solid rgba(35, 50, 80, 0.92);
   border-radius: 20px;
   padding: 16px;
-  background: linear-gradient(180deg, rgba(17, 24, 45, 0.88), rgba(14, 21, 41, 0.9));
+  background: linear-gradient(180deg, rgba(23, 26, 30, 0.92), rgba(19, 22, 26, 0.94));
   transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
 .card:hover {
   transform: translateY(-1px);
-  border-color: rgba(103, 232, 249, 0.22);
-  box-shadow: 0 14px 34px rgba(3, 8, 20, 0.24);
+  border-color: rgba(var(--accent-rgb), 0.24);
+  box-shadow: 0 14px 34px rgba(7, 10, 14, 0.22);
 }
 
 .card-selected {
-  border-color: rgba(103, 232, 249, 0.55);
+  border-color: rgba(var(--accent-rgb), 0.48);
   box-shadow:
-    inset 3px 0 0 rgba(103, 232, 249, 0.95),
-    0 16px 36px rgba(5, 14, 28, 0.28);
-  background: linear-gradient(180deg, rgba(20, 32, 60, 0.95), rgba(14, 21, 41, 0.96));
+    inset 3px 0 0 rgba(var(--accent-rgb), 0.9),
+    0 16px 36px rgba(6, 9, 13, 0.26);
+  background: linear-gradient(180deg, rgba(32, 36, 41, 0.96), rgba(21, 24, 28, 0.96));
 }
 
 .card-header {
@@ -343,9 +349,9 @@ a {
 }
 
 .selected-pill {
-  border-color: rgba(103, 232, 249, 0.45);
-  background: rgba(103, 232, 249, 0.12);
-  color: #baf8ff;
+  border-color: rgba(var(--accent-rgb), 0.42);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: #e7edf3;
 }
 
 .status-pill.draft {
@@ -373,7 +379,7 @@ a {
 .meta span {
   padding: 5px 8px;
   border-radius: 999px;
-  background: rgba(22, 32, 58, 0.8);
+  background: rgba(29, 33, 38, 0.86);
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -397,21 +403,278 @@ a {
 }
 
 .bubble.user {
-  background: rgba(103, 232, 249, 0.15);
+  background: rgba(var(--accent-rgb), 0.16);
 }
 
 .bubble.agent {
-  background: rgba(167, 139, 250, 0.15);
+  background: rgba(var(--accent-2-rgb), 0.16);
 }
 
 .bubble.system {
-  background: rgba(20, 28, 50, 0.85);
+  background: rgba(24, 28, 33, 0.88);
 }
 
 .graph-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 620px;
   border-top: 1px solid rgba(35, 50, 80, 0.9);
+}
+
+.graph-shell-light {
+  background:
+    radial-gradient(circle at top left, rgba(var(--accent-rgb), 0.06), transparent 24%),
+    radial-gradient(circle at top right, rgba(var(--accent-2-rgb), 0.08), transparent 20%),
+    linear-gradient(180deg, rgba(17, 19, 21, 0.98), rgba(24, 27, 31, 0.98));
+  color: #eef1f4;
+}
+
+.graph-summary {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(35, 50, 80, 0.6);
+}
+
+.graph-summary-light {
+  background: linear-gradient(180deg, rgba(23, 26, 30, 0.92), rgba(17, 19, 21, 0.92));
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.12);
+}
+
+.graph-toolbar {
+  align-items: center;
+}
+
+.graph-node-count {
+  font-size: 11px;
+  padding-inline: 9px;
+}
+
+.graph-toolbar-light .chip {
+  border-color: rgba(var(--accent-rgb), 0.14);
+  background: rgba(29, 33, 38, 0.9);
+  color: #e6ebf0;
+}
+
+.graph-toolbar-light .chip.active {
+  background: rgba(var(--accent-rgb), 0.96);
+  color: #101418;
+}
+
+.graph-cluster-legend {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.graph-cluster-legend-compact {
+  gap: 5px;
+}
+
+.graph-cluster-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--cluster-border, rgba(17, 24, 39, 0.12));
+  background: var(--cluster-soft, rgba(255, 255, 255, 0.86));
+  color: #dfe9f8;
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 180px;
+}
+
+.graph-cluster-pill.active {
+  box-shadow: inset 0 0 0 1px var(--cluster-color, #111827);
+}
+
+.graph-cluster-pill span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-cluster-pill-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: var(--cluster-color, #111827);
+}
+
+.graph-filter {
+  max-width: 220px;
+}
+
+.graph-callout-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.graph-callout-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.graph-callout {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  max-width: 220px;
+  font-size: 11px;
+}
+
+.graph-callout-light {
+  border: 1px solid rgba(var(--accent-rgb), 0.14);
+  background: rgba(23, 26, 30, 0.94);
+  color: #e6ebf0;
+}
+
+.graph-callout strong,
+.graph-callout span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graph-canvas {
+  min-height: 0;
+  background: transparent;
+}
+
+.graph-canvas-light .react-flow,
+.graph-canvas-light .react-flow__renderer,
+.graph-canvas-light .react-flow__pane,
+.graph-canvas-light .react-flow__viewport {
+  background: transparent;
+}
+
+.graph-canvas .react-flow__controls {
+  box-shadow: 0 8px 20px rgba(8, 15, 30, 0.2);
+  border: 1px solid rgba(var(--accent-rgb), 0.14);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.graph-canvas .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.graph-canvas .react-flow__edge:hover .react-flow__edge-path {
+  opacity: 0.92;
+}
+
+.graph-canvas .react-flow__controls-button {
+  background: rgba(23, 26, 30, 0.96);
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.12);
+  color: #e6ebf0;
+}
+
+.graph-canvas .react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.graph-canvas .react-flow__controls-button:hover {
+  background: rgba(29, 33, 38, 0.98);
+}
+
+.graph-canvas .react-flow__controls-button svg {
+  fill: #e6ebf0;
+}
+
+.graph-node-card {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: #eef1f4;
+  padding: 0;
+}
+
+.graph-node-text {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(238, 241, 244, 0.94);
+  overflow-wrap: anywhere;
+  background: rgba(29, 33, 38, 0.72);
+  border: 1px solid var(--cluster-border, rgba(17, 24, 39, 0.08));
+  border-radius: 999px;
+  padding: 4px 8px;
+  box-shadow: 0 2px 8px rgba(8, 12, 16, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.graph-node-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: var(--cluster-color, #111111);
+  box-shadow: 0 0 0 3px var(--cluster-soft, rgba(17, 17, 17, 0.08));
+}
+
+.graph-node-wiki .graph-node-dot {
+  width: 15px;
+  height: 15px;
+}
+
+.graph-node-scrap .graph-node-dot {
+  width: 12px;
+  height: 12px;
+}
+
+.graph-node-claim .graph-node-dot {
+  width: 9px;
+  height: 9px;
+}
+
+.graph-node-concept .graph-node-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.graph-node-wiki .graph-node-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  background: rgba(40, 45, 51, 0.82);
+}
+
+.graph-node-scrap .graph-node-text {
+  color: rgba(229, 233, 238, 0.9);
+}
+
+.graph-node-claim .graph-node-text,
+.graph-node-concept .graph-node-text {
+  color: rgba(210, 216, 223, 0.86);
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.graph-empty {
+  margin: 18px;
+}
+
+nextjs-portal,
+[data-next-badge-root],
+[data-next-mark],
+[data-nextjs-toast],
+#__next-build-watcher {
+  display: none !important;
 }
 
 .detail-scroll {
@@ -463,8 +726,8 @@ a {
   gap: 10px;
   padding: 16px 18px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 199, 0.16);
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(8, 12, 24, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(180deg, rgba(24, 27, 31, 0.84), rgba(17, 19, 21, 0.92));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
@@ -497,9 +760,9 @@ a {
   min-width: 0;
   padding: 7px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(94, 234, 212, 0.18);
-  background: rgba(15, 118, 110, 0.14);
-  color: #ccfbf1;
+  border: 1px solid rgba(var(--accent-2-rgb), 0.2);
+  background: rgba(var(--accent-2-rgb), 0.12);
+  color: #efe8e0;
   font-size: 0.82rem;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -596,5 +859,9 @@ a {
 
   .toolbar-block {
     min-width: 100%;
+  }
+
+  .graph-summary-grid {
+    grid-template-columns: 1fr;
   }
 }

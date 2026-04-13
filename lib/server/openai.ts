@@ -15,6 +15,7 @@ import {
   updateWikiDraftStatus
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
+import { getGraphContextForPrompt } from '@/lib/server/graphify'
 import { publishWikiDraftToNotion } from '@/lib/server/notion'
 import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
 
@@ -792,12 +793,21 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     }))
 
   const retrievalQueries = extractSearchQueries(input.prompt)
+  const graphContext = getGraphContextForPrompt(input.prompt)
   const prefetchedWikiDrafts = rankByQueryHits(
     retrievalQueries,
     (query) => searchWikiDraftDetails(query, 6),
     listWikiDrafts(3),
     4
-  ).map(trimWikiDraft)
+  )
+    .concat(
+      graphContext.wikiIds
+        .map((id) => getWikiDraft(id))
+        .filter((draft): draft is WikiDraft => Boolean(draft))
+    )
+    .filter((draft, index, list) => list.findIndex((candidate) => candidate.id === draft.id) === index)
+    .slice(0, 6)
+    .map(trimWikiDraft)
 
   const prefetchedScraps = rankByQueryHits(
     retrievalQueries,
@@ -805,7 +815,14 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     [],
     6
   )
+    .concat(
+      graphContext.scrapIds
+        .map((id) => getScrap(id))
+        .filter((scrap): scrap is Scrap => Boolean(scrap))
+    )
     .filter((scrap) => !input.selectedScrapIds.includes(scrap.id))
+    .filter((scrap, index, list) => list.findIndex((candidate) => candidate.id === scrap.id) === index)
+    .slice(0, 8)
     .map(trimScrap)
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -816,6 +833,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
         `User prompt: ${input.prompt}`,
         `Selected scraps: ${JSON.stringify(selectedScraps)}`,
         `Saved scrap count: ${listScraps(12).length}`,
+        `Graph-matched node ids: ${JSON.stringify(graphContext.matchedNodeIds)}`,
         `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
         `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,
         'Use the prefetched context first. If it is insufficient, call tools to inspect more evidence before answering.'

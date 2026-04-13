@@ -2,7 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import clsx from 'clsx'
-import type { ChatRequestBody, Scrap, ScrapSummary, WikiDraft, WikiDraftSummary, WikiGenerationResponse } from '@/lib/types'
+import dynamic from 'next/dynamic'
+import type {
+  ChatRequestBody,
+  GraphifyNode,
+  GraphifyNodeDetail,
+  GraphifyPayload,
+  Scrap,
+  ScrapSummary,
+  WikiDraft,
+  WikiDraftSummary,
+  WikiGenerationResponse
+} from '@/lib/types'
+
+const GraphifyView = dynamic(() => import('@/components/GraphifyView'), {
+  ssr: false,
+  loading: () => <div className='empty graph-empty'>Graphify 캔버스를 불러오는 중입니다.</div>
+})
 
 type ChatMessage = {
   role: 'user' | 'agent' | 'system'
@@ -62,17 +78,19 @@ function buildWikiGenerationMessage(payload: WikiGenerationResponse, drafts: Wik
   return '위키 초안을 생성했습니다.'
 }
 
-type WorkspaceTab = 'scraps' | 'wiki'
+type WorkspaceTab = 'scraps' | 'wiki' | 'graphify'
 const maxSelectedScraps = 100
 type DetailState =
   | { type: 'scrap'; item: Scrap }
   | { type: 'wiki'; item: WikiDraft }
+  | { type: 'graph'; item: GraphifyNodeDetail }
   | null
 
 export default function KnowledgeAgentApp() {
   const [tab, setTab] = useState<WorkspaceTab>('scraps')
   const [scraps, setScraps] = useState<ScrapSummary[]>([])
   const [wikiDrafts, setWikiDrafts] = useState<WikiDraftSummary[]>([])
+  const [graphify, setGraphify] = useState<GraphifyPayload | null>(null)
   const [selectedScrapIds, setSelectedScrapIds] = useState<string[]>([])
   const [selectedWikiIds, setSelectedWikiIds] = useState<string[]>([])
   const [detail, setDetail] = useState<DetailState>(null)
@@ -80,6 +98,7 @@ export default function KnowledgeAgentApp() {
   const [wikiTopic, setWikiTopic] = useState('')
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(false)
+  const [graphLoading, setGraphLoading] = useState(false)
   const [wikiProgress, setWikiProgress] = useState<{ completed: number; total: number; title?: string } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
@@ -112,12 +131,14 @@ export default function KnowledgeAgentApp() {
     setRefreshing(true)
     try {
       const queryParam = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : ''
-      const [scrapResponse, wikiResponse] = await Promise.all([
+      const [scrapResponse, wikiResponse, graphResponse] = await Promise.all([
         fetch(`/api/scraps${queryParam}`).then((res) => res.json()) as Promise<{ scraps: ScrapSummary[] }>,
-        fetch('/api/wiki/drafts').then((res) => res.json()) as Promise<{ drafts: WikiDraftSummary[] }>
+        fetch('/api/wiki/drafts').then((res) => res.json()) as Promise<{ drafts: WikiDraftSummary[] }>,
+        fetch('/api/graphify').then((res) => res.json()) as Promise<GraphifyPayload>
       ])
       setScraps(scrapResponse.scraps)
       setWikiDrafts(wikiResponse.drafts)
+      setGraphify(graphResponse)
       setLastUpdatedAt(new Date().toLocaleTimeString())
     } finally {
       setRefreshing(false)
@@ -141,6 +162,51 @@ export default function KnowledgeAgentApp() {
     const payload = await response.json()
     if (response.ok) {
       setDetail({ type: 'wiki', item: payload.draft as WikiDraft })
+    }
+  }
+
+  async function openGraphNode(node: GraphifyNode) {
+    if (node.kind === 'scrap' && node.refId) {
+      await openScrap(node.refId)
+      return
+    }
+    if (node.kind === 'wiki' && node.refId) {
+      await openWikiDraft(node.refId)
+      return
+    }
+    const response = await fetch(`/api/graphify/node/${encodeURIComponent(node.id)}`)
+    const payload = await response.json()
+    if (response.ok) {
+      setDetail({ type: 'graph', item: payload as GraphifyNodeDetail })
+    }
+  }
+
+  async function rebuildGraph() {
+    setGraphLoading(true)
+    try {
+      const response = await fetch('/api/graphify/rebuild', {
+        method: 'POST'
+      })
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload.error ?? '그래프 재빌드에 실패했습니다.')
+      }
+      setGraphify(payload as GraphifyPayload)
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'system',
+          text: `Graphify를 갱신했습니다. 클러스터 ${payload.clusters.length}개, 노드 ${payload.nodes.length}개를 반영했습니다.`
+        }
+      ])
+      setTab('graphify')
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        { role: 'system', text: normalizeUiError(error, 'Graphify를 갱신하지 못했습니다.') }
+      ])
+    } finally {
+      setGraphLoading(false)
     }
   }
 
@@ -479,7 +545,8 @@ export default function KnowledgeAgentApp() {
             <div className='chip-row'>
               {[
                 ['scraps', 'Scraps'],
-                ['wiki', 'Wiki']
+                ['wiki', 'Wiki'],
+                ['graphify', 'Graphify']
               ].map(([value, label]) => (
                 <button
                   key={value}
@@ -510,52 +577,59 @@ export default function KnowledgeAgentApp() {
             </div>
           </div>
 
-          <div className='toolbar-row toolbar-controls'>
-            <div className='toolbar-block'>
-              <label className='muted small toolbar-label'>Search scraps</label>
-              <div className='toolbar-inline'>
-                <input
-                  className='input'
-                  value={scrapQuery}
-                  onChange={(event) => setScrapQuery(event.target.value)}
-                  placeholder='도메인, 텍스트, 태그 검색'
-                />
-                <button className='action-button primary' onClick={() => void refresh(scrapQuery)} disabled={refreshing} type='button'>
-                  {refreshing ? 'Refreshing...' : 'Refresh'}
-                </button>
+          {tab !== 'graphify' ? (
+            <div className='toolbar-row toolbar-controls'>
+              <div className='toolbar-block'>
+                <label className='muted small toolbar-label'>Search scraps</label>
+                <div className='toolbar-inline'>
+                  <input
+                    className='input'
+                    value={scrapQuery}
+                    onChange={(event) => setScrapQuery(event.target.value)}
+                    placeholder='도메인, 텍스트, 태그 검색'
+                  />
+                  <button className='action-button primary' onClick={() => void refresh(scrapQuery)} disabled={refreshing} type='button'>
+                    {refreshing ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              <div className='toolbar-block'>
+                <label className='muted small toolbar-label'>Create wiki draft</label>
+                <div className='toolbar-inline'>
+                  <input
+                    className='input'
+                    value={wikiTopic}
+                    onChange={(event) => setWikiTopic(event.target.value)}
+                    placeholder='주제를 비워두면 자동으로 제목과 구조를 만듭니다'
+                  />
+                  <button className='action-button primary strong' onClick={handleGenerateWiki} disabled={loading || selectedScrapCount === 0} type='button'>
+                    Generate Wiki
+                  </button>
+                </div>
               </div>
             </div>
+          ) : null}
 
-            <div className='toolbar-block'>
-              <label className='muted small toolbar-label'>Create wiki draft</label>
-              <div className='toolbar-inline'>
-                <input
-                  className='input'
-                  value={wikiTopic}
-                  onChange={(event) => setWikiTopic(event.target.value)}
-                  placeholder='주제를 비워두면 자동으로 제목과 구조를 만듭니다'
-                />
-                <button className='action-button primary strong' onClick={handleGenerateWiki} disabled={loading || selectedScrapCount === 0} type='button'>
-                  Generate Wiki
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className='selection-bar'>
+          {tab !== 'graphify' ? (
+            <div className='selection-bar'>
             <div className='selection-summary'>
               <span className='status-pill selected-pill'>
-                {tab === 'scraps' ? `${selectedScrapCount} selected` : `${selectedWikiIds.length} selected`}
+                {tab === 'scraps'
+                  ? `${selectedScrapCount} selected`
+                  : tab === 'wiki'
+                    ? `${selectedWikiIds.length} selected`
+                    : ''}
               </span>
               {tab === 'scraps' ? (
                 <span className='muted small'>
                   {allVisibleSelected ? '현재 보이는 스크랩이 모두 선택됨' : `선택한 스크랩으로 채팅/위키 생성 가능 · 최대 ${maxSelectedScraps}개`}
                 </span>
-              ) : (
+              ) : tab === 'wiki' ? (
                 <span className='muted small'>
                   {allVisibleWikiSelected ? '현재 보이는 위키 초안이 모두 선택됨' : '선택한 위키 초안을 삭제할 수 있습니다.'}
                 </span>
-              )}
+              ) : null}
             </div>
             {tab === 'scraps' ? (
               <div className='button-row'>
@@ -569,7 +643,7 @@ export default function KnowledgeAgentApp() {
                   Delete Selected
                 </button>
               </div>
-            ) : (
+            ) : tab === 'wiki' ? (
               <div className='button-row'>
                 <button
                   className='action-button'
@@ -594,8 +668,9 @@ export default function KnowledgeAgentApp() {
                   Delete Selected
                 </button>
               </div>
-            )}
-          </div>
+            ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className='list'>
@@ -710,6 +785,15 @@ export default function KnowledgeAgentApp() {
                 <div className='empty'>아직 위키 초안이 없습니다. 스크랩을 선택한 뒤 Generate Wiki를 눌러 초안을 만드세요.</div>
               ) : null}
             </div>
+          ) : null}
+
+          {tab === 'graphify' ? (
+            <GraphifyView
+              payload={graphify}
+              loading={graphLoading}
+              onRebuild={rebuildGraph}
+              onOpenNode={openGraphNode}
+            />
           ) : null}
 
         </div>
@@ -866,6 +950,47 @@ export default function KnowledgeAgentApp() {
                   </button>
                 ) : null}
               </div>
+            </>
+          ) : null}
+
+          {detail?.type === 'graph' ? (
+            <>
+              <h3 className='title'>{detail.item.node.label}</h3>
+              <div className='meta'>
+                <span>{detail.item.node.kind}</span>
+                <span>{detail.item.node.provenance}</span>
+                <span>degree {detail.item.node.degree}</span>
+                {detail.item.node.clusterId ? <span>{detail.item.node.clusterId}</span> : null}
+              </div>
+              {detail.item.node.summary ? (
+                <div className='wiki-detail'>
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>요약</h4>
+                    <p className='wiki-summary'>{detail.item.node.summary}</p>
+                  </section>
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>연결된 노드</h4>
+                    <div className='wiki-claim-list'>
+                      {detail.item.neighbors.map((neighbor) => (
+                        <article key={neighbor.edge.id} className='wiki-claim-card'>
+                          <div className='wiki-claim-head'>
+                            <strong>{neighbor.node.label}</strong>
+                            <span className={clsx('status-pill', neighbor.edge.provenance === 'INFERRED' && 'approved')}>
+                              {neighbor.edge.relation}
+                            </span>
+                          </div>
+                          <p className='wiki-paragraph'>
+                            {neighbor.edge.provenance} · confidence {neighbor.edge.confidence.toFixed(2)}
+                          </p>
+                          {neighbor.edge.explanation ? (
+                            <p className='wiki-paragraph'>{neighbor.edge.explanation}</p>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
             </>
           ) : null}
 

@@ -145,6 +145,86 @@ export interface WikiGenerationResponse {
   drafts?: WikiDraft[]
 }
 
+export type GraphifyNodeKind = 'scrap' | 'wiki' | 'claim' | 'concept'
+export type GraphifyProvenance = 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS'
+export type GraphifyEdgeRelation =
+  | 'summarizes'
+  | 'derived_from'
+  | 'contains_claim'
+  | 'contains_concept'
+  | 'mentions_concept'
+  | 'related_to'
+  | 'supports'
+  | 'conflicts_with'
+  | 'about'
+
+export interface GraphifyNode {
+  id: string
+  kind: GraphifyNodeKind
+  label: string
+  refId: string | null
+  provenance: GraphifyProvenance
+  confidence: number
+  degree: number
+  clusterId: string | null
+  summary?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface GraphifyEdge {
+  id: string
+  source: string
+  target: string
+  relation: GraphifyEdgeRelation
+  provenance: GraphifyProvenance
+  confidence: number
+  weight: number
+  explanation?: string
+}
+
+export interface GraphifyCluster {
+  id: string
+  label: string
+  color: string
+  nodeIds: string[]
+}
+
+export interface GraphifyGodNode {
+  nodeId: string
+  label: string
+  degree: number
+  kind: GraphifyNodeKind
+}
+
+export interface GraphifySurprisingConnection {
+  edgeId: string
+  sourceId: string
+  sourceLabel: string
+  targetId: string
+  targetLabel: string
+  relation: GraphifyEdgeRelation
+  confidence: number
+  explanation?: string
+}
+
+export interface GraphifyPayload {
+  nodes: GraphifyNode[]
+  edges: GraphifyEdge[]
+  clusters: GraphifyCluster[]
+  godNodes: GraphifyGodNode[]
+  surprisingConnections: GraphifySurprisingConnection[]
+  generatedAt: string | null
+  stale: boolean
+}
+
+export interface GraphifyNodeDetail {
+  node: GraphifyNode
+  neighbors: Array<{
+    edge: GraphifyEdge
+    node: GraphifyNode
+  }>
+}
+
 export interface ChatRequestBody {
   prompt: string
   selectedScrapIds: string[]

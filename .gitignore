@@ -2,7 +2,9 @@
 node_modules
 .env
 .env.local
+.codex
 data/*.db
+data/*.json
 data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
