@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND = 'http://localhost:3000'
+const DEFAULT_BACKEND = 'http://222.116.135.238:3000'
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'clipwiki:capture-visible-tab') {

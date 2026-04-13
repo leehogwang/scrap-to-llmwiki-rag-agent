@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import clsx from 'clsx'
 import type { ChatRequestBody, Scrap, ScrapSummary, WikiDraft, WikiDraftSummary, WikiGenerationResponse } from '@/lib/types'
 
@@ -42,14 +42,22 @@ function extractGeneratedDrafts(payload: WikiGenerationResponse) {
 function buildWikiGenerationMessage(payload: WikiGenerationResponse, drafts: WikiDraft[]) {
   const message = payload.message.trim()
   if (message) return message
+  const createdCount = drafts.filter((draft) => draft.generationAction === 'created').length
+  const updatedCount = drafts.filter((draft) => draft.generationAction === 'updated').length
   if (drafts.length === 1) {
-    return `위키 초안 "${drafts[0].title}"를 생성했습니다.`
+    return drafts[0].generationAction === 'updated'
+      ? `기존 위키 "${drafts[0].title}"를 업데이트했습니다.`
+      : `위키 초안 "${drafts[0].title}"를 생성했습니다.`
   }
   if (drafts.length > 1) {
     const titles = drafts.slice(0, 3).map((draft) => draft.title).filter(Boolean)
+    const actionSummary = [
+      createdCount > 0 ? `새 생성 ${createdCount}개` : '',
+      updatedCount > 0 ? `기존 업데이트 ${updatedCount}개` : ''
+    ].filter(Boolean).join(' · ')
     return titles.length > 0
-      ? `${drafts.length}개의 위키 초안을 생성했습니다. 생성된 초안: ${titles.join(', ')}`
-      : `${drafts.length}개의 위키 초안을 생성했습니다.`
+      ? `${drafts.length}개의 위키 초안을 처리했습니다.${actionSummary ? ` (${actionSummary})` : ''} 생성된 초안: ${titles.join(', ')}`
+      : `${drafts.length}개의 위키 초안을 처리했습니다.${actionSummary ? ` (${actionSummary})` : ''}`
   }
   return '위키 초안을 생성했습니다.'
 }
@@ -72,6 +80,7 @@ export default function KnowledgeAgentApp() {
   const [wikiTopic, setWikiTopic] = useState('')
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(false)
+  const [wikiProgress, setWikiProgress] = useState<{ completed: number; total: number; title?: string } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -80,6 +89,24 @@ export default function KnowledgeAgentApp() {
       text: 'ClipWiki는 브라우저 스크랩을 Notion에 저장하고, 누적된 스크랩을 바탕으로 LLM-Wiki 초안을 만드는 학습 보조 에이전트입니다.'
     }
   ])
+  const chatLogRef = useRef<HTMLDivElement | null>(null)
+
+  function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter') return
+    if (event.shiftKey) return
+    if (event.nativeEvent.isComposing) return
+    event.preventDefault()
+    void handleChat()
+  }
+
+  useEffect(() => {
+    const node = chatLogRef.current
+    if (!node) return
+    node.scrollTo({
+      top: node.scrollHeight,
+      behavior: 'smooth'
+    })
+  }, [messages, loading])
 
   const refresh = useCallback(async (query = scrapQuery) => {
     setRefreshing(true)
@@ -136,16 +163,16 @@ export default function KnowledgeAgentApp() {
     await refresh(scrapQuery)
 
     if (drafts.length === 1) {
-      await openWikiDraft(drafts[0].id)
       setTab('wiki')
+      await openWikiDraft(drafts[0].id)
       if (appendMessage) {
         setMessages((current) => [...current, { role: 'system', text: buildWikiGenerationMessage(payload, drafts) }])
       }
       return
     }
 
-    setDetail(null)
     setTab('wiki')
+    await openWikiDraft(drafts[0].id)
     if (appendMessage) {
       setMessages((current) => [...current, { role: 'system', text: buildWikiGenerationMessage(payload, drafts) }])
     }
@@ -156,6 +183,7 @@ export default function KnowledgeAgentApp() {
   async function handleGenerateWiki() {
     if (selectedScrapIds.length === 0) return
     setLoading(true)
+    setWikiProgress({ completed: 0, total: 0 })
     try {
       const response = await fetch('/api/wiki/generate', {
         method: 'POST',
@@ -165,12 +193,61 @@ export default function KnowledgeAgentApp() {
           selectedScrapIds
         })
       })
-      const payload = await response.json() as WikiGenerationResponse & { error?: string }
-      if (!response.ok) throw new Error(payload.error ?? 'Failed to generate wiki draft')
-      await handleWikiGenerationResponse(payload)
+      if (!response.ok) {
+        const payload = await response.json() as { error?: string }
+        throw new Error(payload.error ?? 'Failed to generate wiki draft')
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new Error('위키 초안 생성 스트림을 읽을 수 없습니다.')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalPayload: WikiGenerationResponse | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          const event = JSON.parse(trimmed) as
+            | { type: 'progress'; completed: number; total: number; title?: string }
+            | { type: 'result'; payload: WikiGenerationResponse }
+            | { type: 'error'; message: string }
+
+          if (event.type === 'progress') {
+            setWikiProgress({
+              completed: event.completed,
+              total: event.total,
+              title: event.title
+            })
+            continue
+          }
+
+          if (event.type === 'error') {
+            throw new Error(event.message)
+          }
+
+          finalPayload = event.payload
+        }
+      }
+
+      if (!finalPayload) {
+        throw new Error('위키 초안 생성 결과를 받지 못했습니다.')
+      }
+
+      await handleWikiGenerationResponse(finalPayload)
     } catch (error) {
       setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '위키 초안 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.') }])
     } finally {
+      setWikiProgress(null)
       setLoading(false)
     }
   }
@@ -276,42 +353,77 @@ export default function KnowledgeAgentApp() {
     }
   }
 
-  async function approveDraft() {
-    if (!detail || detail.type !== 'wiki') return
-    const response = await fetch(`/api/wiki/${detail.item.id}/approve`, {
-      method: 'POST'
-    })
-    const payload = await response.json()
-    if (!response.ok) {
-      setMessages((current) => [...current, { role: 'system', text: payload.error ?? '초안 승인 실패' }])
-      return
+  async function approveDraft(id: string, options: { openAfter?: boolean } = {}) {
+    const openAfter = options.openAfter ?? true
+    setLoading(true)
+    try {
+      const approveResponse = await fetch(`/api/wiki/${id}/approve`, {
+        method: 'POST'
+      })
+      const approvePayload = await approveResponse.json()
+      if (!approveResponse.ok) {
+        throw new Error(approvePayload.error ?? '초안 승인 실패')
+      }
+
+      const publishResponse = await fetch(`/api/wiki/${id}/publish`, {
+        method: 'POST'
+      })
+      const publishPayload = await publishResponse.json()
+      if (!publishResponse.ok) {
+        throw new Error(publishPayload.error ?? 'Notion 게시 실패')
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'system',
+          text: publishPayload.notionPage?.url
+            ? `"${publishPayload.draft.title}" 위키를 승인하고 Notion에 저장했습니다: ${publishPayload.notionPage.url}`
+            : `"${publishPayload.draft.title}" 위키를 승인하고 Notion에 저장했습니다.`
+        }
+      ])
+      await refresh(scrapQuery)
+      setTab('wiki')
+      if (openAfter) {
+        await openWikiDraft(publishPayload.draft.id)
+      }
+    } catch (error) {
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '위키 승인 또는 Notion 저장에 실패했습니다.') }])
+    } finally {
+      setLoading(false)
     }
-    setMessages((current) => [...current, { role: 'system', text: `"${payload.draft.title}" 초안을 승인했습니다.` }])
-    await refresh(scrapQuery)
-    await openWikiDraft(payload.draft.id)
   }
 
-  async function publishDraft() {
-    if (!detail || detail.type !== 'wiki') return
-    const response = await fetch(`/api/wiki/${detail.item.id}/publish`, {
-      method: 'POST'
-    })
-    const payload = await response.json()
-    if (!response.ok) {
-      setMessages((current) => [...current, { role: 'system', text: payload.error ?? 'Notion 게시 실패' }])
-      return
-    }
-    setMessages((current) => [
-      ...current,
-      {
-        role: 'system',
-        text: payload.notionPage?.url
-          ? `Notion에 게시했습니다: ${payload.notionPage.url}`
-          : 'Notion에 위키 페이지를 게시했습니다.'
+  async function publishDraft(id: string, options: { openAfter?: boolean } = {}) {
+    const openAfter = options.openAfter ?? true
+    setLoading(true)
+    try {
+      const response = await fetch(`/api/wiki/${id}/publish`, {
+        method: 'POST'
+      })
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Notion 게시 실패')
       }
-    ])
-    await refresh(scrapQuery)
-    await openWikiDraft(payload.draft.id)
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'system',
+          text: payload.notionPage?.url
+            ? `Notion에 게시했습니다: ${payload.notionPage.url}`
+            : 'Notion에 위키 페이지를 게시했습니다.'
+        }
+      ])
+      await refresh(scrapQuery)
+      setTab('wiki')
+      if (openAfter) {
+        await openWikiDraft(payload.draft.id)
+      }
+    } catch (error) {
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, 'Notion 게시에 실패했습니다.') }])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const scrapCards = useMemo(() => scraps, [scraps])
@@ -323,7 +435,7 @@ export default function KnowledgeAgentApp() {
       <aside className='panel left-panel'>
         <section className='section'>
           <p className='muted small'>Chrome Scrap to Notion to LLM-Wiki</p>
-          <h1 className='title' style={{ fontSize: 24, marginBottom: 6 }}>ClipWiki Workspace</h1>
+          <h1 className='title left-hero-title'>ClipWiki Workspace</h1>
           <p className='muted small'>
             브라우저에서 <span className='inline-code'>Alt + Drag</span>로 스크랩하고, 저장된 자료를 바탕으로 위키 초안을 생성합니다.
           </p>
@@ -336,7 +448,7 @@ export default function KnowledgeAgentApp() {
               ? `${selectedScrapCount}개의 스크랩이 선택되어 있습니다. 선택한 자료만 기준으로 답변하거나 위키 초안을 만들 수 있습니다.`
               : '질문 전에 스크랩을 선택하면 범위를 좁힐 수 있습니다.'}
           </p>
-          <div className='chat-log'>
+          <div className='chat-log' ref={chatLogRef}>
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={clsx('bubble', message.role)}>
                 {message.text}
@@ -347,6 +459,7 @@ export default function KnowledgeAgentApp() {
             className='textarea ask-textarea'
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={handlePromptKeyDown}
             placeholder='예: 선택한 스크랩들에서 공통 개념과 약한 주장만 정리해줘.'
           />
           <div className='button-row'>
@@ -378,6 +491,18 @@ export default function KnowledgeAgentApp() {
                 </button>
               ))}
             </div>
+            {wikiProgress ? (
+              <div className='toolbar-progress'>
+                <span className='status-pill selected-pill'>
+                  {wikiProgress.total > 0 ? `위키 생성 ${wikiProgress.completed} / ${wikiProgress.total}` : '위키 초안 준비 중'}
+                </span>
+                {wikiProgress.title ? (
+                  <span className='muted small'>{wikiProgress.title}</span>
+                ) : (
+                  <span className='muted small'>선택한 스크랩을 정리하고 있습니다.</span>
+                )}
+              </div>
+            ) : null}
             <div className='toolbar-stats'>
               <span className='muted small'>Captured scraps: {scraps.length}</span>
               <span className='muted small'>Wiki drafts: {wikiDrafts.length}</span>
@@ -551,6 +676,16 @@ export default function KnowledgeAgentApp() {
                     <span>{new Date(draft.updatedAt).toLocaleString()}</span>
                   </div>
                     <div className='button-row card-actions' style={{ marginTop: 12 }}>
+                      {draft.status === 'draft' ? (
+                        <button className='action-button success' onClick={() => void approveDraft(draft.id, { openAfter: false })} disabled={loading} type='button'>
+                          Approve
+                        </button>
+                      ) : null}
+                      {draft.status === 'approved' ? (
+                        <button className='action-button primary' onClick={() => void publishDraft(draft.id, { openAfter: false })} disabled={loading} type='button'>
+                          Publish
+                        </button>
+                      ) : null}
                       <button
                         className={clsx('action-button', selected && 'success')}
                         onClick={() =>
@@ -645,37 +780,88 @@ export default function KnowledgeAgentApp() {
               <div className='meta'>
                 <span>{detail.item.status}</span>
                 <span>{detail.item.mode}</span>
+                <span>{detail.item.topic}</span>
                 <span>{detail.item.scrapIds.length} scraps</span>
               </div>
-              <div className='empty'>{detail.item.summary}</div>
-              <div className='empty'>
-                <strong>Key concepts</strong>
-                <div className='stack' style={{ marginTop: 10 }}>
-                  {detail.item.keyConcepts.map((concept) => (
-                    <div key={concept} className='meta'>
-                      <span>{concept}</span>
+              <div className='wiki-detail'>
+                <section className='wiki-block'>
+                  <h4 className='wiki-block-title'>요약</h4>
+                  <p className='wiki-summary'>{detail.item.summary}</p>
+                </section>
+
+                {detail.item.keyConcepts.length > 0 ? (
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>핵심 개념</h4>
+                    <div className='wiki-chip-list'>
+                      {detail.item.keyConcepts.map((concept) => (
+                        <span key={concept} className='wiki-chip'>{concept}</span>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
-              <div className='empty' style={{ maxHeight: 320, overflow: 'auto' }}>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify({
-                    claims: detail.item.claims,
-                    openQuestions: detail.item.openQuestions,
-                    sections: detail.item.sections,
-                    sourceLinks: detail.item.sourceLinks
-                  }, null, 2)}
-                </pre>
+                  </section>
+                ) : null}
+
+                {detail.item.claims.length > 0 ? (
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>주장과 메모</h4>
+                    <div className='wiki-claim-list'>
+                      {detail.item.claims.map((claim, index) => (
+                        <article key={`${claim.claim}-${index}`} className='wiki-claim-card'>
+                          <div className='wiki-claim-head'>
+                            <strong>{claim.claim}</strong>
+                            <span className={clsx('status-pill', claim.supportLevel === 'supported' && 'published', claim.supportLevel === 'weak' && 'draft', claim.supportLevel === 'conflicting' && 'approved')}>
+                              {claim.supportLevel}
+                            </span>
+                          </div>
+                          {claim.evidence.length > 0 ? (
+                            <ul className='wiki-list'>
+                              {claim.evidence.map((item) => (
+                                <li key={item}>{item}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {detail.item.openQuestions.length > 0 ? (
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>열린 질문</h4>
+                    <ul className='wiki-list'>
+                      {detail.item.openQuestions.map((question) => (
+                        <li key={question}>{question}</li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+
+                {detail.item.sections.length > 0 ? (
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>본문</h4>
+                    <div className='wiki-section-list'>
+                      {detail.item.sections.map((section, index) => (
+                        <article key={`${section.heading}-${index}`} className='wiki-section-card'>
+                          <h5 className='wiki-section-title'>{section.heading}</h5>
+                          {section.paragraphs.map((paragraph, paragraphIndex) => (
+                            <p key={`${section.heading}-p-${paragraphIndex}`} className='wiki-paragraph'>{paragraph}</p>
+                          ))}
+                          {section.bullets.length > 0 ? (
+                            <ul className='wiki-list'>
+                              {section.bullets.map((bullet) => (
+                                <li key={bullet}>{bullet}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
               </div>
               <div className='button-row'>
-                {detail.item.status === 'draft' ? (
-                  <button className='action-button success' onClick={approveDraft} type='button'>
-                    Approve Draft
-                  </button>
-                ) : null}
                 {detail.item.status === 'approved' ? (
-                  <button className='action-button primary' onClick={publishDraft} type='button'>
+                  <button className='action-button primary' onClick={() => void publishDraft(detail.item.id)} disabled={loading} type='button'>
                     Publish To Notion
                   </button>
                 ) : null}

@@ -124,6 +124,7 @@ export interface WikiDraft {
   sourceLinks: Array<{ scrapId: string; title: string; url: string }>
   createdAt: string
   updatedAt: string
+  generationAction?: 'created' | 'updated'
 }
 
 export interface WikiDraftSummary {

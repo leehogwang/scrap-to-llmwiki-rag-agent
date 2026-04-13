@@ -1,6 +1,19 @@
 import OpenAI from 'openai'
 import { z } from 'zod'
-import { createId, createWikiDraft, getScrap, getWikiDraft, listScraps, searchScraps, searchWikiDrafts, updateWikiDraftStatus } from '@/lib/server/db'
+import {
+  createId,
+  createWikiDraft,
+  getScrap,
+  getWikiDraft,
+  listScraps,
+  listWikiDrafts,
+  searchScrapDetails,
+  searchScraps,
+  searchWikiDraftDetails,
+  searchWikiDrafts,
+  updateWikiDraftContent,
+  updateWikiDraftStatus
+} from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
 import { publishWikiDraftToNotion } from '@/lib/server/notion'
 import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
@@ -299,23 +312,144 @@ function trimWikiDraft(draft: WikiDraft) {
   }
 }
 
+const queryStopwords = new Set([
+  '이', '그', '저', '것', '수', '등', '및', '그리고', '또는', '관련', '현재', '저장된', '초안', '위키',
+  '스크랩', '설명', '정리', '방법', '수준', '무엇', '뭐야', '해줘', '알려줘', '대한', '에서', '으로', '하는', '있어',
+  'what', 'about', 'with', 'from', 'that', 'this', 'how', 'does', 'whatis', 'framework'
+])
+
+function extractSearchQueries(prompt: string) {
+  const normalized = prompt.trim()
+  if (!normalized) return []
+  const queries = [normalized]
+  const tokens = (normalized.match(/[A-Za-z][A-Za-z0-9_-]{1,}|[가-힣]{2,}/g) ?? [])
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .filter((token) => !queryStopwords.has(token.toLowerCase()))
+  const uniqueTokens = [...new Set(tokens)].slice(0, 8)
+  queries.push(...uniqueTokens)
+  if (uniqueTokens.length >= 2) {
+    queries.push(uniqueTokens.slice(0, 2).join(' '))
+  }
+  return [...new Set(queries)].slice(0, 10)
+}
+
+function rankByQueryHits<T extends { id: string }>(queries: string[], searchFn: (query: string) => T[], fallback: T[] = [], limit = 5) {
+  const scored = new Map<string, { item: T; score: number }>()
+  queries.forEach((query, queryIndex) => {
+    const results = searchFn(query)
+    results.forEach((item, itemIndex) => {
+      const current = scored.get(item.id)
+      const weight = Math.max(1, 20 - itemIndex * 3 - queryIndex)
+      if (current) {
+        current.score += weight
+        return
+      }
+      scored.set(item.id, { item, score: weight })
+    })
+  })
+
+  if (scored.size === 0 && fallback.length > 0) {
+    fallback.slice(0, limit).forEach((item, index) => {
+      scored.set(item.id, { item, score: limit - index })
+    })
+  }
+
+  return [...scored.values()]
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((entry) => entry.item)
+}
+
 export async function createWikiDraftFromScraps(topic: string, scraps: Scrap[], mode: WikiDraft['mode']) {
+  return createOrMergeWikiDraftFromScraps(topic, scraps, mode)
+}
+
+function buildDraftSourceLinks(scraps: Scrap[]) {
+  return scraps.map((scrap) => ({
+    scrapId: scrap.id,
+    title: scrap.title,
+    url: scrap.sourceUrl
+  }))
+}
+
+function buildWikiTokenSet(draft: Pick<WikiDraft, 'title' | 'topic' | 'summary' | 'keyConcepts'>) {
+  return extractTopicTokens([
+    draft.title,
+    draft.topic,
+    draft.summary,
+    draft.keyConcepts.join(' ')
+  ].join('\n'))
+}
+
+function buildScrapTokenSet(topic: string, scraps: Scrap[]) {
+  return extractTopicTokens([
+    topic,
+    ...scraps.map((scrap) => `${scrap.title}\n${scrap.pageTitle}\n${scrap.mergedText.slice(0, 1200)}`)
+  ].join('\n'))
+}
+
+function overlapCount(left: string[], right: string[]) {
+  const rightSet = new Set(right)
+  return new Set(left.filter((token) => rightSet.has(token))).size
+}
+
+function findMergeCandidate(topic: string, scraps: Scrap[]) {
+  const newTokens = buildScrapTokenSet(topic, scraps)
+  if (newTokens.length === 0) return null
+
+  const queries = extractSearchQueries([topic, ...scraps.map((scrap) => scrap.title)].join(' '))
+  const candidateMap = new Map<string, WikiDraft>()
+
+  rankByQueryHits(
+    queries,
+    (query) => searchWikiDraftDetails(query, 5),
+    listWikiDrafts(12),
+    8
+  ).forEach((draft) => {
+    candidateMap.set(draft.id, draft)
+  })
+
+  let best: { draft: WikiDraft; overlap: number } | null = null
+  for (const draft of candidateMap.values()) {
+    const candidateTokens = buildWikiTokenSet(draft)
+    const overlap = overlapCount(newTokens, candidateTokens)
+    if (overlap < 3) continue
+    if (!best || overlap > best.overlap) {
+      best = { draft, overlap }
+    }
+  }
+
+  return best
+}
+
+async function createOrMergeWikiDraftFromScraps(topic: string, scraps: Scrap[], mode: WikiDraft['mode']) {
   const normalizedTopic = topic.trim()
+  const mergeCandidate = findMergeCandidate(normalizedTopic, scraps)
   const prompt = [
-    normalizedTopic
-      ? `사용자가 지정한 주제: ${normalizedTopic}`
-      : '사용자 지정 주제가 없습니다. 제공된 스크랩만 보고 가장 자연스러운 한국어 제목, 주제, 정리 구조를 스스로 정하세요.',
+    mergeCandidate
+      ? `기존 위키 초안을 갱신하세요. 대상 위키 제목: ${mergeCandidate.draft.title} / 주제: ${mergeCandidate.draft.topic}`
+      : normalizedTopic
+        ? `사용자가 지정한 주제: ${normalizedTopic}`
+        : '사용자 지정 주제가 없습니다. 제공된 스크랩만 보고 가장 자연스러운 한국어 제목, 주제, 정리 구조를 스스로 정하세요.',
     `정리 모드: ${mode}`,
-    '선택된 스크랩만 근거로 한국어 위키 초안을 만드세요.',
+    mergeCandidate
+      ? '기존 위키의 좋은 구조와 핵심 개념은 유지하면서, 새 스크랩의 정보로 내용을 확장하거나 수정한 한국어 업데이트 초안을 만드세요.'
+      : '선택된 스크랩만 근거로 한국어 위키 초안을 만드세요.',
     '출력은 반드시 strict JSON으로만 반환하세요. 필드: title, topic, mode, summary, keyConcepts, claims, openQuestions, sections.',
     'title, topic, summary, keyConcepts, openQuestions, sections.heading, sections.paragraphs, sections.bullets는 모두 한국어로 작성하세요.',
     'claims.claim과 claims.evidence도 한국어 설명으로 작성하되, 원문 고유명사나 용어는 필요하면 그대로 유지해도 됩니다.',
     'Claims must use relatedScrapIds that exist in the supplied scraps.',
     '서로 다른 주제가 섞여 있다면 한 주제로 억지로 합치지 말고, 현재 그룹에서 가장 응집도 높은 주제만 정리하세요.',
+    mergeCandidate
+      ? JSON.stringify({
+        existingWiki: trimWikiDraft(mergeCandidate.draft)
+      })
+      : '',
     JSON.stringify({
       scraps: scraps.map(trimScrap)
     })
-  ].join('\n\n')
+  ].filter(Boolean).join('\n\n')
 
   const response = await client.chat.completions.create({
     model: defaultModel,
@@ -354,28 +488,39 @@ export async function createWikiDraftFromScraps(topic: string, scraps: Scrap[], 
   const parsedMode = ['general', 'claim_compare', 'study_notes', 'decision_log', 'onboarding_map'].includes(String(localizedDraft.mode))
     ? String(localizedDraft.mode) as WikiDraft['mode']
     : mode
-  const sourceLinks = scraps.map((scrap) => ({
-    scrapId: scrap.id,
-    title: scrap.title,
-    url: scrap.sourceUrl
-  }))
-
-  const draft = createWikiDraft({
-    id: createId('wiki'),
-    title: cleanString(localizedDraft.title, 200) || inferredTitle,
+  const sourceLinks = buildDraftSourceLinks(scraps)
+  const nextTitle = cleanString(localizedDraft.title, 200) || inferredTitle
+  const nextDraftPayload = {
+    title: nextTitle,
     topic: inferredTopic,
     mode: parsedMode,
+    status: mergeCandidate?.draft.status ?? 'draft',
     summary: inferredSummary,
     keyConcepts,
     claims,
     openQuestions,
     sections,
-    scrapIds: scraps.map((scrap) => scrap.id),
-    sourceLinks
-  })
+    scrapIds: mergeCandidate
+      ? [...new Set([...mergeCandidate.draft.scrapIds, ...scraps.map((scrap) => scrap.id)])]
+      : scraps.map((scrap) => scrap.id),
+    sourceLinks: mergeCandidate
+      ? [
+        ...mergeCandidate.draft.sourceLinks,
+        ...sourceLinks.filter((link) => !mergeCandidate.draft.sourceLinks.some((existing) => existing.scrapId === link.scrapId))
+      ]
+      : sourceLinks
+  }
+
+  const draft = mergeCandidate
+    ? updateWikiDraftContent(mergeCandidate.draft.id, nextDraftPayload, { resetStatusToDraft: true })
+    : createWikiDraft({
+      id: createId('wiki'),
+      ...nextDraftPayload
+    })
   if (!draft) {
     throw new Error('Draft generation succeeded but local draft persistence failed')
   }
+  draft.generationAction = mergeCandidate ? 'updated' : 'created'
   return draft
 }
 
@@ -465,6 +610,11 @@ function shouldUseHeuristicClusters(scraps: Scrap[], groups: Array<{ scrapIds: s
   return average < 0.08 || max < 0.18
 }
 
+function excludeAlreadyAssignedScraps(scraps: Scrap[]) {
+  const assigned = new Set(listWikiDrafts(500).flatMap((draft) => draft.scrapIds))
+  return scraps.filter((scrap) => !assigned.has(scrap.id))
+}
+
 async function clusterScrapsForDrafts(scraps: Scrap[]) {
   const response = await client.chat.completions.create({
     model: defaultModel,
@@ -539,21 +689,42 @@ async function clusterScrapsForDrafts(scraps: Scrap[]) {
   return groups.slice(0, 6)
 }
 
-export async function createWikiDraftsFromSelection(topic: string, scraps: Scrap[], mode: WikiDraft['mode']) {
+export type WikiDraftProgress = {
+  completed: number
+  total: number
+  title?: string
+}
+
+export async function createWikiDraftsFromSelection(
+  topic: string,
+  scraps: Scrap[],
+  mode: WikiDraft['mode'],
+  onProgress?: (progress: WikiDraftProgress) => void | Promise<void>
+) {
+  const freshScraps = excludeAlreadyAssignedScraps(scraps)
+  if (freshScraps.length === 0) {
+    return []
+  }
   const normalizedTopic = topic.trim()
   if (normalizedTopic) {
-    return [await createWikiDraftFromScraps(normalizedTopic, scraps, mode)]
+    await onProgress?.({ completed: 0, total: 1 })
+    const draft = await createWikiDraftFromScraps(normalizedTopic, freshScraps, mode)
+    await onProgress?.({ completed: 1, total: 1, title: draft.title })
+    return [draft]
   }
 
-  const heuristicGroups = heuristicClusterScraps(scraps)
-  const groups = heuristicGroups.length > 1 ? heuristicGroups : await clusterScrapsForDrafts(scraps)
+  const heuristicGroups = heuristicClusterScraps(freshScraps)
+  const groups = heuristicGroups.length > 1 ? heuristicGroups : await clusterScrapsForDrafts(freshScraps)
+  await onProgress?.({ completed: 0, total: groups.length })
   const drafts: WikiDraft[] = []
   for (const group of groups) {
     const groupedScraps = group.scrapIds
-      .map((id) => scraps.find((scrap) => scrap.id === id))
+      .map((id) => freshScraps.find((scrap) => scrap.id === id))
       .filter((scrap): scrap is Scrap => Boolean(scrap))
     if (groupedScraps.length === 0) continue
-    drafts.push(await createWikiDraftFromScraps(group.topic || group.title, groupedScraps, group.mode || mode))
+    const draft = await createWikiDraftFromScraps(group.topic || group.title, groupedScraps, group.mode || mode)
+    drafts.push(draft)
+    await onProgress?.({ completed: drafts.length, total: groups.length, title: draft.title })
   }
   return drafts
 }
@@ -620,6 +791,23 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       sourceHost: scrap.sourceHost
     }))
 
+  const retrievalQueries = extractSearchQueries(input.prompt)
+  const prefetchedWikiDrafts = rankByQueryHits(
+    retrievalQueries,
+    (query) => searchWikiDraftDetails(query, 6),
+    listWikiDrafts(3),
+    4
+  ).map(trimWikiDraft)
+
+  const prefetchedScraps = rankByQueryHits(
+    retrievalQueries,
+    (query) => searchScrapDetails(query, 8),
+    [],
+    6
+  )
+    .filter((scrap) => !input.selectedScrapIds.includes(scrap.id))
+    .map(trimScrap)
+
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: buildSystemPrompt() },
     {
@@ -627,7 +815,10 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       content: [
         `User prompt: ${input.prompt}`,
         `Selected scraps: ${JSON.stringify(selectedScraps)}`,
-        `Saved scrap count: ${listScraps(12).length}`
+        `Saved scrap count: ${listScraps(12).length}`,
+        `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
+        `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,
+        'Use the prefetched context first. If it is insufficient, call tools to inspect more evidence before answering.'
       ].join('\n')
     }
   ]

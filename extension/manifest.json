@@ -16,6 +16,7 @@
     }
   ],
   "action": {
-    "default_title": "ClipWiki Capture"
+    "default_title": "ClipWiki Capture",
+    "default_popup": "popup.html"
   }
 }

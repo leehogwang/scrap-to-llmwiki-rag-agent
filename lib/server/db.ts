@@ -421,6 +421,48 @@ export function updateWikiDraftStatus(id: string, status: WikiDraftStatus, notio
   return getWikiDraft(id)
 }
 
+export function updateWikiDraftContent(
+  id: string,
+  input: Omit<WikiDraft, 'id' | 'notionPageId' | 'createdAt' | 'updatedAt'>,
+  options: { resetStatusToDraft?: boolean } = {}
+) {
+  const db = ensureDb()
+  const current = getWikiDraft(id)
+  if (!current) return null
+  const nextStatus = options.resetStatusToDraft ? 'draft' : input.status
+  db.prepare(`
+    UPDATE wiki_drafts
+    SET title = @title,
+        topic = @topic,
+        mode = @mode,
+        status = @status,
+        summary = @summary,
+        key_concepts_json = @key_concepts_json,
+        claims_json = @claims_json,
+        open_questions_json = @open_questions_json,
+        sections_json = @sections_json,
+        scrap_ids_json = @scrap_ids_json,
+        source_links_json = @source_links_json,
+        updated_at = @updated_at
+    WHERE id = @id
+  `).run({
+    id,
+    title: input.title,
+    topic: input.topic,
+    mode: input.mode,
+    status: nextStatus,
+    summary: input.summary,
+    key_concepts_json: JSON.stringify(input.keyConcepts),
+    claims_json: JSON.stringify(input.claims),
+    open_questions_json: JSON.stringify(input.openQuestions),
+    sections_json: JSON.stringify(input.sections),
+    scrap_ids_json: JSON.stringify(input.scrapIds),
+    source_links_json: JSON.stringify(input.sourceLinks),
+    updated_at: nowIso()
+  })
+  return getWikiDraft(id)
+}
+
 export function deleteWikiDrafts(ids: string[]) {
   if (ids.length === 0) return 0
   const db = ensureDb()
