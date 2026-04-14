@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import clsx from 'clsx'
 import dynamic from 'next/dynamic'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type {
   ChatRequestBody,
   GraphifyEdgeDetail,
@@ -725,7 +727,20 @@ export default function KnowledgeAgentApp() {
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={clsx('chat-item', message.role)}>
                 <div className={clsx('bubble', message.role)}>
-                  {message.text}
+                  <div className='bubble-markdown'>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({ node: _node, ...props }) => <a {...props} target='_blank' rel='noreferrer' />,
+                        p: ({ node: _node, ...props }) => <p {...props} />,
+                        code: ({ node: _node, className, children, ...props }) => (
+                          <code className={clsx('inline-code', className)} {...props}>{children}</code>
+                        )
+                      }}
+                    >
+                      {message.text}
+                    </ReactMarkdown>
+                  </div>
                 </div>
                 {message.role === 'agent' ? (
                   <div className='chat-item-actions'>

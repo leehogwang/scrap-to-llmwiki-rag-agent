@@ -509,6 +509,83 @@ a {
   background: rgba(24, 28, 33, 0.88);
 }
 
+.bubble-markdown {
+  display: grid;
+  gap: 10px;
+}
+
+.bubble-markdown > :first-child {
+  margin-top: 0;
+}
+
+.bubble-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.bubble-markdown p,
+.bubble-markdown ul,
+.bubble-markdown ol,
+.bubble-markdown blockquote,
+.bubble-markdown pre {
+  margin: 0;
+}
+
+.bubble-markdown ul,
+.bubble-markdown ol {
+  padding-left: 18px;
+}
+
+.bubble-markdown li + li {
+  margin-top: 4px;
+}
+
+.bubble-markdown h1,
+.bubble-markdown h2,
+.bubble-markdown h3,
+.bubble-markdown h4 {
+  margin: 0;
+  line-height: 1.28;
+  letter-spacing: -0.01em;
+}
+
+.bubble-markdown h1 {
+  font-size: 1.1rem;
+}
+
+.bubble-markdown h2 {
+  font-size: 1rem;
+}
+
+.bubble-markdown h3,
+.bubble-markdown h4 {
+  font-size: 0.94rem;
+}
+
+.bubble-markdown blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.18);
+  padding-left: 10px;
+  color: rgba(232, 237, 242, 0.84);
+}
+
+.bubble-markdown pre {
+  overflow-x: auto;
+  border-radius: 12px;
+  background: rgba(14, 16, 19, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 12px;
+}
+
+.bubble-markdown pre code {
+  white-space: pre;
+  display: block;
+}
+
+.bubble-markdown a {
+  color: #a8d0ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .chat-item-actions {
   display: flex;
   align-items: center;
