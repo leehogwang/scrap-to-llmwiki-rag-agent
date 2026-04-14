@@ -39,18 +39,9 @@ The system follows a bounded agent pattern:
 
 ![ClipWiki demo](./docs/demo/clipwiki-demo.gif)
 
-### Screenshots
-
-![Dashboard workspace](./docs/screenshots/01-dashboard-home.png)
-
-![Scrap detail view](./docs/screenshots/02-scrap-detail.png)
-
-![Wiki generation result](./docs/screenshots/03-wiki-generation-result.png)
-
-### Video
+### Asset
 
 - [clipwiki-demo.gif](./docs/demo/clipwiki-demo.gif)
-- [clipwiki-demo.webm](./docs/demo/clipwiki-demo.webm)
 
 ## How It Works
 
