@@ -462,11 +462,34 @@ a {
   overflow: auto;
   display: grid;
   gap: 10px;
+  justify-items: start;
+  align-items: start;
+  align-content: start;
+  grid-auto-rows: max-content;
   scrollbar-width: none;
   padding-right: 4px;
 }
 
+.chat-item {
+  display: inline-grid;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.chat-item.user {
+  justify-self: end;
+}
+
+.chat-item.agent,
+.chat-item.system {
+  justify-self: start;
+}
+
 .bubble {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
   border-radius: 18px;
   padding: 11px 13px;
   line-height: 1.55;
@@ -484,6 +507,38 @@ a {
 
 .bubble.system {
   background: rgba(24, 28, 33, 0.88);
+}
+
+.chat-item-actions {
+  display: flex;
+  align-items: center;
+}
+
+.chat-save-button {
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(28, 32, 37, 0.92);
+  color: #e8edf2;
+  border-radius: 999px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.chat-save-button:hover:enabled {
+  background: rgba(var(--accent-rgb), 0.16);
+  border-color: rgba(var(--accent-rgb), 0.42);
+  transform: translateY(-1px);
+}
+
+.chat-save-button:disabled {
+  opacity: 0.58;
+  cursor: default;
 }
 
 .graph-shell {

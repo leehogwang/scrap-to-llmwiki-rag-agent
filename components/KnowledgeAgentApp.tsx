@@ -162,6 +162,8 @@ export default function KnowledgeAgentApp() {
       text: 'ClipWiki는 브라우저 스크랩을 Notion에 저장하고, 누적된 스크랩을 바탕으로 LLM-Wiki 초안을 만드는 학습 보조 에이전트입니다.'
     }
   ])
+  const [savingChatIndexes, setSavingChatIndexes] = useState<number[]>([])
+  const [savedChatIndexes, setSavedChatIndexes] = useState<number[]>([])
   const chatLogRef = useRef<HTMLDivElement | null>(null)
   const automationBootedRef = useRef(false)
 
@@ -566,6 +568,34 @@ export default function KnowledgeAgentApp() {
     }
   }
 
+  async function saveChatMessageToScrap(index: number) {
+    const target = messages[index]
+    if (!target || target.role !== 'agent') return
+    const question = [...messages.slice(0, index)].reverse().find((message) => message.role === 'user')?.text?.trim() ?? ''
+    const answer = target.text.trim()
+    if (!question || !answer) return
+
+    setSavingChatIndexes((current) => [...current, index])
+    try {
+      const response = await fetch('/api/scraps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, answer })
+      })
+      const payload = await parseJsonResponse<{ error?: string }>(response)
+      if (!response.ok) {
+        throw new Error(payload?.error ?? '대화 스크랩 저장에 실패했습니다.')
+      }
+      setSavedChatIndexes((current) => [...current, index])
+      setMessages((current) => [...current, { role: 'system', text: '현재 질의와 답변을 스크랩에 저장했습니다.' }])
+      await refresh(scrapQuery)
+    } catch (error) {
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '대화 스크랩 저장에 실패했습니다.') }])
+    } finally {
+      setSavingChatIndexes((current) => current.filter((value) => value !== index))
+    }
+  }
+
   async function approveDraft(id: string, options: { openAfter?: boolean } = {}) {
     const openAfter = options.openAfter ?? true
     setLoading(true)
@@ -669,8 +699,22 @@ export default function KnowledgeAgentApp() {
           <p className='muted small'>저장된 모든 스크랩과 위키를 함께 참고해서 답합니다.</p>
           <div className='chat-log' ref={chatLogRef}>
             {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={clsx('bubble', message.role)}>
-                {message.text}
+              <div key={`${message.role}-${index}`} className={clsx('chat-item', message.role)}>
+                <div className={clsx('bubble', message.role)}>
+                  {message.text}
+                </div>
+                {message.role === 'agent' ? (
+                  <div className='chat-item-actions'>
+                    <button
+                      className='chat-save-button'
+                      disabled={savingChatIndexes.includes(index) || savedChatIndexes.includes(index)}
+                      onClick={() => void saveChatMessageToScrap(index)}
+                      type='button'
+                    >
+                      {savedChatIndexes.includes(index) ? '저장됨' : savingChatIndexes.includes(index) ? '저장 중...' : '+'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
@@ -679,13 +723,8 @@ export default function KnowledgeAgentApp() {
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={handlePromptKeyDown}
-            placeholder='예: 저장된 위키와 스크랩을 바탕으로 MAD 프레임워크가 무엇인지 설명해줘.'
+            placeholder='예: 저장된 위키와 스크랩을 바탕으로 MAD 프레임워크가 무엇인지 설명해줘. Enter로 전송하고 Shift+Enter로 줄바꿈합니다.'
           />
-          <div className='button-row'>
-            <button className='action-button primary strong' onClick={handleChat} disabled={loading} type='button'>
-              Run Chat
-            </button>
-          </div>
         </section>
       </aside>
 
