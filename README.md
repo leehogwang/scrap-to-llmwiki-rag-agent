@@ -2,7 +2,7 @@
 
 [한국어 README 보기](./README-ko.md)
 
-ClipWiki is a Chrome extension and web dashboard that turns rough web scraps into a personal LLM-Wiki. You `Alt + Drag` over any part of a webpage, ClipWiki captures text and images, stores the scrap in Notion, and later uses `gpt-4.1-mini` to organize saved scraps into one or more wiki drafts.
+ClipWiki is a Chrome extension and web dashboard that turns rough web scraps into a personal LLM-Wiki. You `Alt + Drag` over any part of a webpage, ClipWiki captures text and images, stores the scrap in Notion, and later uses either the OpenAI API or Codex auth-backed ChatGPT quota to organize saved scraps into wiki drafts and a Graphify-style knowledge map.
 
 ## Overview
 
@@ -12,14 +12,15 @@ ClipWiki is designed for a study workflow:
 - keep the original source URL and attached images in Notion
 - search over accumulated scraps
 - ask questions over both raw scraps and generated wiki drafts
-- turn selected scraps into structured wiki pages
+- turn accumulated scraps into structured wiki pages
+- inspect the resulting knowledge as an interactive graph
 
 The system follows a bounded agent pattern:
 
 - the extension captures page-local data
 - the backend validates and stores scraps
-- the LLM only works through explicit tool calls
-- the user approves drafts before publishing to Notion
+- the LLM only works through explicit tool calls or a bounded Codex-auth flow
+- the user can approve drafts manually or enable auto-approve
 
 ## Key Features
 
@@ -27,11 +28,18 @@ The system follows a bounded agent pattern:
 - Notion-backed scrap archive with source links and image uploads
 - OCR fallback for image-heavy or non-DOM regions
 - local CPU-based TF-IDF smart expansion for same-page context
-- `gpt-4.1-mini` tool-calling loop for Q&A and wiki generation
+- YouTube support:
+  - dragging over a watch page player can attach the transcript
+  - dragging over a YouTube thumbnail card can resolve the video and attach transcript metadata when available
+- chat answers rendered as Markdown
+- `+` action below assistant answers to save the Q/A pair back as a scrap
+- OpenAI API mode or Codex auth mode (`gpt-5.4-mini` by default for auth-backed flows)
 - topic-aware wiki generation:
   - if a topic is provided, generate one focused wiki draft
-  - if no topic is provided, infer groups from selected scraps and generate one or more drafts
-- Ask flow that can search both scraps and saved wiki drafts
+  - if no topic is provided, infer groups from unassigned scraps and generate one or more drafts
+  - if a new group matches an existing wiki, update that wiki instead of blindly creating a duplicate
+- Ask flow that searches both scraps and saved wiki drafts
+- Graphify tab with `wiki`, `scrap`, `claim`, and `concept` nodes plus LLM-inferred surprising wiki-to-wiki connections
 
 ## Demo
 
@@ -67,7 +75,9 @@ ClipWiki does not blindly save only the cropped text. It:
 Saved scraps become raw material for wiki drafts.
 
 - with a topic: one draft is generated around that topic
-- without a topic: the model first groups selected scraps by topic, then generates one draft per group
+- without a topic: the model groups currently unassigned scraps by topic, then generates one draft per group
+- if new scraps match an existing wiki, the system updates and broadens that wiki instead of always creating a new one
+- wiki generation can be triggered manually and also runs once per day when there are new scraps
 
 Each draft contains:
 
@@ -86,8 +96,18 @@ The Ask panel is not limited to raw scraps.
 
 - it can search saved scraps
 - it can search wiki drafts
+- it can use Graphify context, including surprising connection explanations
 - it can pull full bundles from both
 - it answers using retrieved knowledge instead of relying on memory alone
+
+### 5. Graphify
+
+Graphify visualizes the current knowledge base as a graph.
+
+- node types: `wiki`, `scrap`, `claim`, `concept`
+- cluster colors represent topic communities, not individual wiki ownership
+- surprising connections are inferred by the model from wiki `title`, `topic`, `summary`, and `keyConcepts`
+- clicking a surprising edge opens the detail panel with the model's explanation for why the connection is interesting
 
 ## Architecture
 
@@ -104,6 +124,7 @@ The Ask panel is not limited to raw scraps.
   - SQLite in `data/clipwiki.sqlite`
 - Integrations
   - OpenAI Chat Completions + Moderation
+  - Codex auth-backed ChatGPT responses
   - Notion API
 
 ### Core server modules
@@ -113,15 +134,21 @@ The Ask panel is not limited to raw scraps.
 - `lib/server/smart-scrap.ts`
   - TF-IDF + cosine enrichment
 - `lib/server/openai.ts`
-  - tool definitions, chat loop, wiki draft generation
+  - tool definitions, chat loop, wiki draft generation, wiki-first retrieval
 - `lib/server/notion.ts`
   - Notion page/file upload and publish flow
 - `lib/server/db.ts`
   - local SQLite storage for scraps and wiki drafts
+- `lib/server/graphify.ts`
+  - graph construction, caching, clustering, surprising connection inference
+- `lib/server/youtube.ts`
+  - YouTube transcript handling
+- `lib/server/codex-client.ts`
+  - auth-backed ChatGPT/Codex request path
 
 ## Tool Calling Flow
 
-The project uses OpenAI Chat Completions `tools` with a developer-in-the-loop pattern.
+The project uses OpenAI Chat Completions `tools` with a developer-in-the-loop pattern. In auth mode, bounded Codex-auth prompts are used for the same high-level tasks without switching the product UX.
 
 Current tool surface includes:
 
@@ -151,6 +178,8 @@ npm install
 Create `.env.local`:
 
 ```bash
+USE_CODEX_AUTH=false
+CODEX_AUTH_MODEL=gpt-5.4-mini
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_MODERATION_MODEL=omni-moderation-latest
@@ -158,6 +187,12 @@ NOTION_API_KEY=...
 NOTION_SCRAP_DATABASE_ID=...
 NOTION_WIKI_ROOT_PAGE_ID=...
 ```
+
+Notes:
+
+- `USE_CODEX_AUTH=true` uses `~/.codex/auth.json` from `codex login`
+- `OPENAI_API_KEY` is only required when `USE_CODEX_AUTH=false`
+- moderation still uses the standard OpenAI API key path
 
 ## Run Locally
 
@@ -202,6 +237,15 @@ Recommended Scrap DB properties:
 - `Images`
 - `Region Screenshot`
 
+## Daily Automation
+
+ClipWiki uses a mixed automatic/manual update model.
+
+- wiki generation can run automatically once per day, but only when there are new unassigned scraps
+- graph rebuilding can also run automatically once per day
+- both can be triggered manually from the top toolbar
+- wiki updates immediately trigger a graph rebuild so Graphify stays in sync
+
 ## Project Structure
 
 ```text
@@ -225,7 +269,6 @@ lib/
     smart-scrap.ts
 docs/
   screenshots/
-  demo/
 data/
 ```
 
@@ -236,6 +279,13 @@ data/
 - `zod` validation on tool arguments and capture payloads
 - scrap content treated as untrusted data, never instructions
 - explicit approval step before publishing wiki drafts to Notion
+
+## Current Product Behavior
+
+- scrap selection is primarily for deletion, not for narrowing Ask
+- Ask uses all scraps and all wiki drafts by default
+- wiki generation is driven by all currently unassigned scraps
+- approved and published drafts can be surfaced in Notion, while Graphify can visualize drafts too
 
 ## Notes
 

@@ -2,7 +2,7 @@
 
 [Read the English README](./README.md)
 
-ClipWiki는 크롬 익스텐션과 웹 대시보드를 결합해, 거칠게 모아둔 웹 스크랩을 개인 LLM-Wiki로 바꾸는 도구입니다. 웹에서 `Alt + Drag`로 영역을 선택하면 텍스트와 이미지가 Notion에 저장되고, 이후 `gpt-4.1-mini`가 누적된 스크랩을 바탕으로 위키 초안을 생성합니다.
+ClipWiki는 크롬 익스텐션과 웹 대시보드를 결합해, 거칠게 모아둔 웹 스크랩을 개인 LLM-Wiki로 바꾸는 도구입니다. 웹에서 `Alt + Drag`로 영역을 선택하면 텍스트와 이미지가 Notion에 저장되고, 이후 OpenAI API 또는 Codex auth 기반 ChatGPT quota를 이용해 위키 초안과 Graphify 지식 그래프를 만듭니다.
 
 ## 개요
 
@@ -12,7 +12,8 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 - 원문 링크와 이미지를 포함한 상태로 Notion에 보관
 - 저장된 스크랩을 검색
 - 스크랩과 위키 초안을 함께 기반으로 질문
-- 선택한 스크랩들을 구조화된 위키 초안으로 변환
+- 누적 스크랩을 구조화된 위키 초안으로 변환
+- 결과 지식을 인터랙티브 그래프로 탐색
 
 ## 핵심 기능
 
@@ -20,11 +21,19 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 - Notion 기반 스크랩 저장소와 원문 링크 기록
 - 이미지가 있으면 함께 저장, 텍스트가 부족하면 OCR 보강
 - 로컬 CPU에서 TF-IDF + cosine으로 same-page 문맥 확장
-- `gpt-4.1-mini` 기반 tool-calling 에이전트
+- YouTube 지원
+  - watch 페이지의 영상 영역을 스크랩하면 transcript를 붙일 수 있음
+  - 영상 목록 썸네일 카드를 스크랩해도 video 메타데이터와 transcript를 가져올 수 있음
+- 좌측 Ask 패널 답변은 Markdown으로 렌더링
+- 답변 아래 `+` 버튼으로 `사용자 질의 / 대답` 형식의 Q&A를 scrap으로 저장 가능
+- OpenAI API 모드 또는 Codex auth 모드 지원
+  - auth 모드 기본 모델: `gpt-5.4-mini`
 - 위키 생성 방식
   - 주제를 입력하면 해당 주제로 위키 1개 생성
-  - 주제를 비워두면 선택 스크랩을 주제별로 나누어 위키 여러 개 생성 가능
+  - 주제를 비워두면 미반영 스크랩을 주제별로 나누어 위키 여러 개 생성 가능
+  - 기존 위키와 유사하면 새 위키를 만드는 대신 기존 위키를 보강
 - `Ask` 패널에서 스크랩과 위키 초안을 함께 검색
+- `Graphify` 탭에서 `wiki / scrap / claim / concept` 그래프와 놀라운 연결 탐색
 
 ## 데모 자산
 
@@ -56,7 +65,9 @@ ClipWiki는 단순 크롭 텍스트만 저장하지 않습니다.
 저장된 스크랩은 위키의 원재료가 됩니다.
 
 - topic이 있으면 하나의 위키 초안으로 정리
-- topic이 없으면 선택한 스크랩을 먼저 주제별로 나누고, 그룹별로 위키 초안 생성
+- topic이 없으면 현재 미반영 스크랩을 먼저 주제별로 나누고, 그룹별로 위키 초안 생성
+- 새 스크랩이 기존 위키와 유사하면 새 문서를 만들지 않고 기존 위키를 확장/갱신
+- 위키 생성은 수동 실행도 가능하고, 새 스크랩이 있을 때 하루 1회 자동 실행도 가능
 
 위키 초안에는 다음이 포함됩니다.
 
@@ -75,8 +86,18 @@ ClipWiki는 단순 크롭 텍스트만 저장하지 않습니다.
 
 - 스크랩 검색
 - 위키 초안 검색
+- Graphify의 놀라운 연결 설명도 retrieval 컨텍스트로 활용
 - 필요한 경우 둘 다 불러와 참조
 - 검색된 지식을 바탕으로 답변
+
+### 5. Graphify
+
+Graphify는 현재 지식 베이스를 그래프로 보여줍니다.
+
+- 노드 타입: `wiki`, `scrap`, `claim`, `concept`
+- 색은 개별 위키가 아니라 **주제 군집** 기준
+- 놀라운 선은 위키의 `title`, `topic`, `summary`, `keyConcepts`를 바탕으로 모델이 wiki↔wiki 연결을 판정
+- 놀라운 선을 클릭하면 우측 상세 패널에 “왜 이 연결이 흥미로운지” 설명이 표시됨
 
 ## 아키텍처
 
@@ -91,6 +112,7 @@ ClipWiki는 단순 크롭 텍스트만 저장하지 않습니다.
   - `data/clipwiki.sqlite`
 - 외부 연동
   - OpenAI Chat Completions / Moderation
+  - Codex auth 기반 ChatGPT responses
   - Notion API
 
 핵심 서버 모듈:
@@ -100,6 +122,9 @@ ClipWiki는 단순 크롭 텍스트만 저장하지 않습니다.
 - `lib/server/openai.ts`
 - `lib/server/notion.ts`
 - `lib/server/db.ts`
+- `lib/server/graphify.ts`
+- `lib/server/youtube.ts`
+- `lib/server/codex-client.ts`
 
 ## Function Calling 흐름
 
@@ -136,6 +161,8 @@ npm run dev
 `.env.local`:
 
 ```bash
+USE_CODEX_AUTH=false
+CODEX_AUTH_MODEL=gpt-5.4-mini
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_MODERATION_MODEL=omni-moderation-latest
@@ -143,6 +170,12 @@ NOTION_API_KEY=...
 NOTION_SCRAP_DATABASE_ID=...
 NOTION_WIKI_ROOT_PAGE_ID=...
 ```
+
+설명:
+
+- `USE_CODEX_AUTH=true`이면 `codex login`으로 생성된 `~/.codex/auth.json`을 사용합니다.
+- `OPENAI_API_KEY`는 `USE_CODEX_AUTH=false`일 때 필수입니다.
+- moderation은 항상 일반 OpenAI API 키 경로를 사용합니다.
 
 ## 크롬 익스텐션 로드
 
@@ -200,7 +233,6 @@ lib/
     smart-scrap.ts
 docs/
   screenshots/
-  demo/
 data/
 ```
 
@@ -212,8 +244,16 @@ data/
 - 스크랩 내용은 instruction이 아니라 untrusted data로 취급
 - Notion 게시 전 승인 단계 필요
 
+## 자동화 동작
+
+- 새 미반영 scrap이 있을 때만 하루 1회 위키 자동 생성
+- 그래프도 하루 1회 자동 갱신 가능
+- 둘 다 상단 툴바에서 수동 실행 가능
+- 위키가 갱신되면 그래프도 즉시 다시 만들어 Graphify에 반영
+
 ## 참고
 
 - 대부분의 로직은 서버 쪽이라 서버 재시작만 하면 반영됩니다.
 - 익스텐션 코드 변경은 크롬에서 `Reload + 페이지 새로고침`이 필요합니다.
 - 개인용 중심 프로젝트라 일부 입력 상한은 넉넉하게 잡아두었습니다.
+- scrap 선택은 기본적으로 삭제용이며, Ask는 전체 scraps + 전체 wiki drafts를 봅니다.
