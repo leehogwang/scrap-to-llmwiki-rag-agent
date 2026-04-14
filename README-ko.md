@@ -30,11 +30,11 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 
 ### GIF
 
-![ClipWiki 데모](./docs/demo/clipwiki-demo-20260414.gif)
+![ClipWiki 데모](./docs/demo/clipwiki-demo-20260414b.gif)
 
 ### 자산
 
-- [clipwiki-demo-20260414.gif](./docs/demo/clipwiki-demo-20260414.gif)
+- [clipwiki-demo-20260414b.gif](./docs/demo/clipwiki-demo-20260414b.gif)
 
 ## 동작 방식
 

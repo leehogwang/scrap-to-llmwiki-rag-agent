@@ -16,9 +16,10 @@ export async function POST(request: NextRequest) {
     const result = await runClipWikiChat(parsed)
     return NextResponse.json(result)
   } catch (error) {
+    const isBadRequest = error instanceof z.ZodError
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to run chat' },
-      { status: 400 }
+      { status: isBadRequest ? 400 : 500 }
     )
   }
 }

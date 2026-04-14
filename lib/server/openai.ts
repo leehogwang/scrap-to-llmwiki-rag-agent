@@ -16,14 +16,16 @@ import {
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
 import { getCodexAuth } from '@/lib/server/codex-auth'
-import { runCodexJson } from '@/lib/server/codex-client'
+import { runCodexJson, runCodexText } from '@/lib/server/codex-client'
 import { getGraphContextForPrompt } from '@/lib/server/graphify'
 import { publishWikiDraftToNotion } from '@/lib/server/notion'
 import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
 
 const moderationModel = getOptionalEnv('OPENAI_MODERATION_MODEL', 'omni-moderation-latest')
-const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
 const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
+const defaultModel = useCodexAuth
+  ? getOptionalEnv('CODEX_AUTH_MODEL', 'gpt-5.4-mini')
+  : getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
 
 function buildAiClient(): OpenAI {
@@ -879,60 +881,31 @@ export async function runClipWikiChat(input: ChatRequestBody) {
   let createdDrafts: WikiDraft[] = []
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API tool loop ---
-    const input_list: any[] = [
-      { role: 'user', content: userMessageContent }
-    ]
+    const allWikiDrafts = listWikiDrafts(500).map(trimWikiDraft)
+    const allScraps = listScraps(1000).map(trimScrap)
+    const codexPrompt = [
+      userMessageContent,
+      'Saved wiki drafts (all):',
+      JSON.stringify(allWikiDrafts),
+      'Saved scraps (all):',
+      JSON.stringify(allScraps),
+      'Answer the user in Korean.',
+      'Use the saved wiki drafts first, then use scraps to fill gaps.',
+      'Do not mention internal ids unless the user asks.',
+      'If the user is effectively asking to refresh or build wiki pages, tell them to use the "위키 생성/갱신" button instead of pretending that it already happened.'
+    ].join('\n\n')
 
-    for (let round = 0; round < 6; round += 1) {
-      const response = await (aiClient as any).responses.create({
-        model: defaultModel,
-        temperature: 0.2,
-        instructions: buildSystemPrompt(),
-        input: input_list,
-        tools: [searchTool, getBundleTool, searchWikiTool, getWikiBundleTool, createDraftTool],
-        store: false
-      })
+    const text = await runCodexText({
+      instructions: buildSystemPrompt(),
+      input: codexPrompt,
+      model: defaultModel
+    })
 
-      // Extract tool calls from response.output
-      const toolCalls = response.output.filter(
-        (o: any): o is { type: 'function_call'; call_id: string; name: string; arguments: string } =>
-          o.type === 'function_call'
-      )
-
-      if (toolCalls.length > 0) {
-        // Add tool calls to input
-        for (const tc of toolCalls) {
-          input_list.push({ type: 'function_call', call_id: tc.call_id, name: tc.name, arguments: tc.arguments })
-        }
-
-        // Execute tools and add results
-        for (const tc of toolCalls) {
-          let result: unknown
-          try {
-            result = await executeTool(tc.name, tc.arguments)
-            if (tc.name === 'create_wiki_draft') {
-              createdDrafts = Array.isArray(result) ? (result as WikiDraft[]) : [result as WikiDraft]
-              createdDraft = createdDrafts[0] ?? null
-            }
-          } catch (error) {
-            result = {
-              error: error instanceof Error ? error.message : 'Tool execution failed',
-              toolName: tc.name,
-              providedArguments: tc.arguments
-            }
-          }
-          input_list.push({ type: 'function_call_output', call_id: tc.call_id, output: JSON.stringify(result) })
-        }
-        continue
-      }
-
-      return {
-        blocked: false,
-        message: response.output_text ?? '응답을 생성하지 못했습니다.',
-        draft: createdDraft,
-        drafts: createdDrafts
-      }
+    return {
+      blocked: false,
+      message: text || '응답을 생성하지 못했습니다.',
+      draft: createdDraft,
+      drafts: createdDrafts
     }
   } else {
     // --- 기존: Chat Completions API tool loop ---
