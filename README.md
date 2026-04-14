@@ -2,18 +2,33 @@
 
 [한국어 README 보기](./README-ko.md)
 
-ClipWiki is a Chrome extension and web dashboard that turns rough web scraps into a personal LLM-Wiki. You `Alt + Drag` over any part of a webpage, ClipWiki captures text and images, stores the scrap in Notion, and later uses either the OpenAI API or Codex auth-backed ChatGPT quota to organize saved scraps into wiki drafts and a Graphify-style knowledge map.
+ClipWiki is a Chrome extension and web dashboard for **progressively strengthened RAG**. Instead of re-reading loose scraps every time like a conventional RAG stack, ClipWiki captures web evidence with `Alt + Drag`, stores it in Notion, and continuously turns accumulated scraps into wiki drafts and a Graphify-style knowledge map. The more you save, refine, and connect, the stronger the retrieval layer becomes.
 
 ## Overview
 
-ClipWiki is designed for a study workflow:
+ClipWiki is designed for a study workflow that **extends and repairs the weaknesses of basic RAG**:
 
 - capture interesting fragments while browsing
 - keep the original source URL and attached images in Notion
-- search over accumulated scraps
+- avoid re-sending the same raw material every time
 - ask questions over both raw scraps and generated wiki drafts
-- turn accumulated scraps into structured wiki pages
+- turn accumulated scraps into structured wiki pages that become a stronger retrieval layer over time
 - inspect the resulting knowledge as an interactive graph
+
+Traditional RAG is useful for fetching evidence, but it has several practical limits:
+
+- it often re-sends large amounts of raw text on every query
+- retrieved chunks remain flat and loosely organized
+- knowledge does not naturally accumulate into a reusable long-term layer
+- related ideas across different documents are hard to connect explicitly
+- the system answers questions, but rarely leaves behind a cleaner knowledge structure for the next query
+
+ClipWiki pushes beyond those limits by:
+
+- preserving raw scraps as evidence
+- transforming them into reusable wiki knowledge
+- updating existing wiki pages when similar new scraps arrive
+- exposing cross-topic relationships through Graphify
 
 The system follows a bounded agent pattern:
 
@@ -28,6 +43,10 @@ The system follows a bounded agent pattern:
 - Notion-backed scrap archive with source links and image uploads
 - OCR fallback for image-heavy or non-DOM regions
 - local CPU-based TF-IDF smart expansion for same-page context
+- progressively strengthened RAG:
+  - raw scraps remain as evidence
+  - wiki drafts become an increasingly structured retrieval layer
+  - similar new scraps update existing wiki pages instead of always creating duplicates
 - YouTube support:
   - dragging over a watch page player can attach the transcript
   - dragging over a YouTube thumbnail card can resolve the video and attach transcript metadata when available
@@ -39,6 +58,7 @@ The system follows a bounded agent pattern:
   - if no topic is provided, infer groups from unassigned scraps and generate one or more drafts
   - if a new group matches an existing wiki, update that wiki instead of blindly creating a duplicate
 - Ask flow that searches both scraps and saved wiki drafts
+- positioned as a **RAG system that gets stronger as knowledge accumulates**, not a one-shot retrieval pipeline
 - Graphify tab with `wiki`, `scrap`, `claim`, and `concept` nodes plus LLM-inferred surprising wiki-to-wiki connections
 
 ## Demo
