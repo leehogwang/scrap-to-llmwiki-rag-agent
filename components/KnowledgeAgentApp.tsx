@@ -713,7 +713,6 @@ export default function KnowledgeAgentApp() {
     <main className='shell'>
       <aside className='panel left-panel'>
         <section className='section'>
-          <p className='muted small'>Chrome Scrap to Notion to LLM-Wiki</p>
           <h1 className='title left-hero-title'>ClipWiki Workspace</h1>
           <p className='muted small'>
             브라우저에서 <span className='inline-code'>Alt + Drag</span>로 스크랩하고, 저장된 자료를 바탕으로 위키 초안을 생성합니다.
@@ -721,8 +720,6 @@ export default function KnowledgeAgentApp() {
         </section>
 
         <section className='section stack ask-section'>
-          <h2 className='title'>Ask over scraps</h2>
-          <p className='muted small'>저장된 모든 스크랩과 위키를 함께 참고해서 답합니다.</p>
           <div className='chat-log' ref={chatLogRef}>
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={clsx('chat-item', message.role)}>

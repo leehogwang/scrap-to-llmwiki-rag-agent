@@ -908,12 +908,22 @@ nextjs-portal,
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
 .ask-textarea {
-  min-height: 138px;
+  min-height: 96px;
+  height: 96px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ask-textarea::-webkit-scrollbar {
+  display: none;
 }
 
 .empty {
