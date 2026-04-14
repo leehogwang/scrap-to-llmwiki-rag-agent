@@ -5,6 +5,8 @@
   let dragging = false
   let startX = 0
   let startY = 0
+  let startTarget = null
+  let suppressNextClickUntil = 0
   let overlay = null
   let selectionBox = null
 
@@ -52,6 +54,50 @@
       rect.bottom < box.top ||
       rect.top > box.bottom
     )
+  }
+
+  function overlapArea(rect, box) {
+    const left = Math.max(rect.left, box.left)
+    const right = Math.min(rect.right, box.right)
+    const top = Math.max(rect.top, box.top)
+    const bottom = Math.min(rect.bottom, box.bottom)
+    const width = Math.max(0, right - left)
+    const height = Math.max(0, bottom - top)
+    return width * height
+  }
+
+  function absoluteUrl(url) {
+    try {
+      return new URL(url, window.location.href).toString()
+    } catch {
+      return ''
+    }
+  }
+
+  function parseYouTubeVideoId(url) {
+    if (!url) return null
+    try {
+      const parsed = new URL(url, window.location.href)
+      if (parsed.hostname.includes('youtu.be')) {
+        const id = parsed.pathname.split('/').filter(Boolean)[0] || ''
+        return id.length === 11 ? id : null
+      }
+      if (parsed.pathname === '/watch' || parsed.pathname.startsWith('/watch')) {
+        const id = parsed.searchParams.get('v') || ''
+        return id.length === 11 ? id : null
+      }
+      if (parsed.pathname.startsWith('/shorts/')) {
+        const id = parsed.pathname.split('/').filter(Boolean)[1] || ''
+        return id.length === 11 ? id : null
+      }
+    } catch {
+      return null
+    }
+    return null
+  }
+
+  function isYouTubePage() {
+    return /(youtube\.com|youtu\.be)$/.test(window.location.hostname)
   }
 
   function collectText(box) {
@@ -196,6 +242,178 @@
       .slice(0, 80)
   }
 
+  function extractYouTubeCardTitle(anchor) {
+    const titleNode = anchor.closest(
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-reel-item-renderer'
+    )
+    const explicit =
+      anchor.getAttribute('title') ||
+      anchor.getAttribute('aria-label') ||
+      titleNode?.querySelector?.('#video-title')?.textContent ||
+      titleNode?.querySelector?.('a#video-title')?.getAttribute?.('title') ||
+      titleNode?.querySelector?.('img')?.getAttribute?.('alt') ||
+      ''
+    return explicit.replace(/\s+/g, ' ').trim()
+  }
+
+  function extractYouTubeChannel(anchor) {
+    const card = anchor.closest(
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-reel-item-renderer'
+    )
+    const channelLink = card?.querySelector?.('#channel-name a, ytd-channel-name a, a.yt-simple-endpoint.style-scope.yt-formatted-string')
+    return {
+      name: (channelLink?.textContent || '').replace(/\s+/g, ' ').trim(),
+      url: channelLink?.href ? absoluteUrl(channelLink.href) : ''
+    }
+  }
+
+  function findYouTubeCardAnchorForElement(element) {
+    if (!element || !element.closest) return null
+    const directAnchor = element.closest('a[href*="/watch?"], a[href*="youtu.be/"], a[href*="/shorts/"]')
+    if (directAnchor && parseYouTubeVideoId(directAnchor.getAttribute('href') || directAnchor.href || '')) {
+      return directAnchor
+    }
+    const card = element.closest(
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-reel-item-renderer, ytd-compact-radio-renderer'
+    )
+    if (!card) return null
+    const nestedAnchor = card.querySelector('a[href*="/watch?"], a[href*="youtu.be/"], a[href*="/shorts/"]')
+    if (!nestedAnchor) return null
+    return parseYouTubeVideoId(nestedAnchor.getAttribute('href') || nestedAnchor.href || '') ? nestedAnchor : null
+  }
+
+  function detectYouTubeCaptureFromElement(element) {
+    if (!isYouTubePage()) return null
+    const baseElement = element?.nodeType === Node.TEXT_NODE ? element.parentElement : element
+    if (!baseElement) return null
+
+    const player = baseElement?.closest?.('#movie_player, #player, ytd-player, .html5-video-player') ||
+      document.querySelector('video, #movie_player, #player, ytd-player, .html5-video-player')
+    if (player && player.contains?.(baseElement)) {
+      const videoId = parseYouTubeVideoId(window.location.href)
+      if (videoId) {
+        const title =
+          (document.querySelector('ytd-watch-metadata h1 yt-formatted-string')?.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim() ||
+          document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+          document.title
+        const channelLink = document.querySelector('#owner #channel-name a, ytd-channel-name a')
+        return {
+          mode: 'watch_video',
+          videoId,
+          videoUrl: absoluteUrl(`https://www.youtube.com/watch?v=${videoId}`),
+          videoTitle: title,
+          channelName: ((channelLink?.textContent || '').replace(/\s+/g, ' ').trim()) || undefined,
+          channelUrl: channelLink?.href ? absoluteUrl(channelLink.href) : undefined,
+          thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || undefined,
+          referrerUrl: window.location.href
+        }
+      }
+    }
+
+    const anchor = findYouTubeCardAnchorForElement(baseElement)
+    if (!anchor) return null
+    const href = anchor.getAttribute('href') || anchor.href || ''
+    const videoId = parseYouTubeVideoId(href)
+    if (!videoId) return null
+    const channel = extractYouTubeChannel(anchor)
+    return {
+      mode: 'thumbnail_card',
+      videoId,
+      videoUrl: absoluteUrl(href),
+      videoTitle: extractYouTubeCardTitle(anchor) || `YouTube video ${videoId}`,
+      channelName: channel.name || undefined,
+      channelUrl: channel.url || undefined,
+      thumbnailUrl: anchor.querySelector('img')?.currentSrc || anchor.querySelector('img')?.src || undefined,
+      referrerUrl: window.location.href
+    }
+  }
+
+  function detectYouTubeCapture(box) {
+    if (!isYouTubePage()) return null
+
+    const playerCandidates = [
+      document.querySelector('video'),
+      document.querySelector('#movie_player'),
+      document.querySelector('#player'),
+      document.querySelector('ytd-player'),
+      document.querySelector('.html5-video-player')
+    ].filter(Boolean)
+
+    let bestPlayer = null
+    let bestPlayerArea = 0
+    for (const node of playerCandidates) {
+      const rect = node.getBoundingClientRect()
+      const area = overlapArea(rect, box)
+      if (area > bestPlayerArea) {
+        bestPlayerArea = area
+        bestPlayer = node
+      }
+    }
+
+    if (bestPlayer && bestPlayerArea > 12000) {
+      const videoId = parseYouTubeVideoId(window.location.href)
+      if (videoId) {
+        const title =
+          (document.querySelector('ytd-watch-metadata h1 yt-formatted-string')?.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim() ||
+          document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+          document.title
+        const channelLink = document.querySelector('#owner #channel-name a, ytd-channel-name a')
+        return {
+          mode: 'watch_video',
+          videoId,
+          videoUrl: absoluteUrl(`https://www.youtube.com/watch?v=${videoId}`),
+          videoTitle: title,
+          channelName: ((channelLink?.textContent || '').replace(/\s+/g, ' ').trim()) || undefined,
+          channelUrl: channelLink?.href ? absoluteUrl(channelLink.href) : undefined,
+          thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || undefined,
+          referrerUrl: window.location.href
+        }
+      }
+    }
+
+    const anchors = [...document.querySelectorAll('a[href*="/watch?"], a[href*="youtu.be/"], a[href*="/shorts/"]')]
+    let bestCard = null
+    let bestCardArea = 0
+    for (const anchor of anchors) {
+      const href = anchor.getAttribute('href') || ''
+      const videoId = parseYouTubeVideoId(href)
+      if (!videoId) continue
+      const card = anchor.closest(
+        'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-reel-item-renderer, ytd-compact-radio-renderer'
+      )
+      const img = anchor.querySelector('img')
+      const rect = (card || img || anchor).getBoundingClientRect()
+      const area = overlapArea(rect, box)
+      if (area > bestCardArea) {
+        bestCardArea = area
+        bestCard = anchor
+      }
+    }
+
+    if (bestCard && bestCardArea > 1200) {
+      const href = bestCard.getAttribute('href') || ''
+      const videoId = parseYouTubeVideoId(href)
+      if (!videoId) return null
+      const channel = extractYouTubeChannel(bestCard)
+      return {
+        mode: 'thumbnail_card',
+        videoId,
+        videoUrl: absoluteUrl(href),
+        videoTitle: extractYouTubeCardTitle(bestCard) || `YouTube video ${videoId}`,
+        channelName: channel.name || undefined,
+        channelUrl: channel.url || undefined,
+        thumbnailUrl: bestCard.querySelector('img')?.currentSrc || bestCard.querySelector('img')?.src || undefined,
+        referrerUrl: window.location.href
+      }
+    }
+
+    return null
+  }
+
   function hasCanvasLikeContent(box) {
     const selectors = [
       'canvas',
@@ -278,10 +496,20 @@
   }
 
   async function finishCapture(box) {
+    const youtubeMeta =
+      detectYouTubeCaptureFromElement(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) ||
+      detectYouTubeCapture(box)
     const candidateChunks = collectCandidateChunks(box)
     const imageCandidates = collectImageCandidates(box)
-    const selectedText = selectedTextFromCandidateChunks(candidateChunks) || collectText(box)
-    const imageUrls = collectImageUrls(box)
+    const selectedText =
+      selectedTextFromCandidateChunks(candidateChunks) ||
+      collectText(box) ||
+      youtubeMeta?.videoTitle ||
+      ''
+    const imageUrls = [...new Set([
+      ...collectImageUrls(box),
+      ...(youtubeMeta?.thumbnailUrl ? [youtubeMeta.thumbnailUrl] : [])
+    ])]
     const shouldUseScreenshot = !selectedText.trim() || hasCanvasLikeContent(box)
 
     let screenshotBlob = null
@@ -293,13 +521,14 @@
     }
 
     const payload = {
-      pageUrl: window.location.href,
-      pageTitle: document.title || 'Untitled page',
+      pageUrl: youtubeMeta?.videoUrl || window.location.href,
+      pageTitle: youtubeMeta?.videoTitle || document.title || 'Untitled page',
       sourceHost: window.location.host,
       selectedText,
       candidateChunks,
       imageUrls,
       imageCandidates,
+      youtubeMeta,
       rect: {
         left: box.left,
         top: box.top,
@@ -330,9 +559,11 @@
     dragging = true
     startX = event.clientX
     startY = event.clientY
+    startTarget = event.target
     showOverlay()
     updateSelectionBox(startX, startY, 0, 0)
     event.preventDefault()
+    event.stopImmediatePropagation()
   }, true)
 
   document.addEventListener('mousemove', (event) => {
@@ -354,14 +585,39 @@
     const top = Math.min(startY, event.clientY)
     const width = Math.abs(event.clientX - startX)
     const height = Math.abs(event.clientY - startY)
-    if (width < 8 || height < 8) {
-      return
-    }
-
     try {
+      if (width < 8 || height < 8) {
+        const clickMeta = detectYouTubeCaptureFromElement(startTarget || event.target || document.elementFromPoint(event.clientX, event.clientY))
+        if (!clickMeta) {
+          return
+        }
+        suppressNextClickUntil = Date.now() + 1200
+        await finishCapture({
+          left: Math.max(0, event.clientX - 6),
+          top: Math.max(0, event.clientY - 6),
+          width: 12,
+          height: 12,
+          right: event.clientX + 6,
+          bottom: event.clientY + 6
+        })
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      suppressNextClickUntil = Date.now() + 1200
       await finishCapture({ left, top, width, height, right: left + width, bottom: top + height })
+      event.preventDefault()
+      event.stopImmediatePropagation()
     } catch (error) {
       toast(error instanceof Error ? error.message : 'ClipWiki capture failed', false)
+    }
+  }, true)
+
+  document.addEventListener('click', (event) => {
+    if (Date.now() < suppressNextClickUntil) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
     }
   }, true)
 })()

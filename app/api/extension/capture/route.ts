@@ -32,6 +32,16 @@ const payloadSchema = z.object({
     width: z.number(),
     height: z.number()
   })).max(256).default([]),
+  youtubeMeta: z.object({
+    mode: z.enum(['watch_video', 'thumbnail_card']),
+    videoId: z.string().length(11),
+    videoUrl: z.string().url(),
+    videoTitle: z.string().min(1).max(1000),
+    channelName: z.string().max(500).optional(),
+    channelUrl: z.string().url().optional(),
+    thumbnailUrl: z.string().url().optional(),
+    referrerUrl: z.string().url().optional()
+  }).optional(),
   userNote: z.string().max(10000).optional(),
   tags: z.array(z.string().max(120)).max(50).optional(),
   rect: z.object({

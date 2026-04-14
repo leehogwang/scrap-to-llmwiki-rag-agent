@@ -43,6 +43,17 @@ export interface ScrapImageCandidate {
   height: number
 }
 
+export interface YouTubeCaptureMeta {
+  mode: 'watch_video' | 'thumbnail_card'
+  videoId: string
+  videoUrl: string
+  videoTitle: string
+  channelName?: string
+  channelUrl?: string
+  thumbnailUrl?: string
+  referrerUrl?: string
+}
+
 export interface ScrapAsset {
   id: string
   filename: string
@@ -240,6 +251,7 @@ export interface ExtensionCapturePayload {
   candidateChunks: ScrapCandidateChunk[]
   imageUrls: string[]
   imageCandidates?: ScrapImageCandidate[]
+  youtubeMeta?: YouTubeCaptureMeta
   userNote?: string
   tags?: string[]
   rect?: SelectionRect

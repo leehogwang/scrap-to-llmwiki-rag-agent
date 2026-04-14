@@ -1,7 +1,8 @@
 import { Client } from '@notionhq/client'
 import type { BlockObjectRequest } from '@notionhq/client/build/src/api-endpoints'
 import { getRequiredEnv, getOptionalEnv } from '@/lib/server/env'
-import type { Scrap, ScrapAsset, SelectionRect, WikiDraft } from '@/lib/types'
+import { youtubeMetadataSummary } from '@/lib/server/youtube'
+import type { Scrap, ScrapAsset, SelectionRect, WikiDraft, YouTubeCaptureMeta } from '@/lib/types'
 
 const NOTION_VERSION = '2026-03-11'
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -213,6 +214,9 @@ export async function createScrapPageInNotion(input: {
   sourceHost: string
   ocrText: string
   mergedText: string
+  transcriptText?: string
+  transcriptStatus?: 'available' | 'unavailable' | 'not_requested'
+  youtubeMeta?: YouTubeCaptureMeta
   captureType: Scrap['captureType']
   tags: string[]
   userNote: string
@@ -261,6 +265,20 @@ export async function createScrapPageInNotion(input: {
       ? input.imageFiles.map((file) => bulletedBlock(file.sourceUrl ?? file.filename))
       : [paragraphBlock('(No image URLs captured)')])
   ]
+
+  if (input.youtubeMeta) {
+    children.push(headingBlock('YouTube video', 2))
+    children.push(paragraphBlock(youtubeMetadataSummary(input.youtubeMeta)))
+    children.push(headingBlock('YouTube transcript', 2))
+    children.push(
+      paragraphBlock(
+        input.transcriptText ||
+          (input.transcriptStatus === 'unavailable'
+            ? '(Transcript unavailable for this video)'
+            : '(No YouTube transcript captured)')
+      )
+    )
+  }
 
   if (input.userNote) {
     children.push(headingBlock('User note', 2))

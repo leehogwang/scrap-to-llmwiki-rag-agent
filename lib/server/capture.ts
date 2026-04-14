@@ -3,7 +3,8 @@ import { createId, upsertScrap } from '@/lib/server/db'
 import { downloadRemoteFile, createScrapPageInNotion } from '@/lib/server/notion'
 import { runOcr } from '@/lib/server/ocr'
 import { enrichSmartScrap } from '@/lib/server/smart-scrap'
-import type { Scrap, ScrapAsset, ScrapCandidateChunk, ScrapImageCandidate, SelectionRect } from '@/lib/types'
+import { fetchYouTubeTranscript } from '@/lib/server/youtube'
+import type { Scrap, ScrapAsset, ScrapCandidateChunk, ScrapImageCandidate, SelectionRect, YouTubeCaptureMeta } from '@/lib/types'
 
 const MAX_IMAGE_COUNT = 6
 const MAX_TEXT_LENGTH = 40000
@@ -37,12 +38,22 @@ export async function captureScrapToNotion(input: {
   candidateChunks: ScrapCandidateChunk[]
   imageUrls: string[]
   imageCandidates?: ScrapImageCandidate[]
+  youtubeMeta?: YouTubeCaptureMeta
   userNote?: string
   tags?: string[]
   screenshot?: File | null
   rect?: SelectionRect
 }) {
-  const normalizedSelectedText = normalizeText(input.selectedText).slice(0, MAX_TEXT_LENGTH)
+  const sourceUrl = input.youtubeMeta?.videoUrl ?? input.pageUrl
+  const pageTitle = normalizeText(input.youtubeMeta?.videoTitle || input.pageTitle) || 'Untitled page'
+  const sourceHost = (() => {
+    try {
+      return new URL(sourceUrl).host || input.sourceHost
+    } catch {
+      return input.sourceHost
+    }
+  })()
+  const normalizedSelectedText = normalizeText(input.selectedText || input.youtubeMeta?.videoTitle || '').slice(0, MAX_TEXT_LENGTH)
   const screenshotBuffer = input.screenshot ? Buffer.from(await input.screenshot.arrayBuffer()) : null
   const ocrText = screenshotBuffer ? await runOcr(screenshotBuffer) : ''
   const smartScrap = enrichSmartScrap({
@@ -52,15 +63,22 @@ export async function captureScrapToNotion(input: {
     selectionRect: input.rect ?? null
   })
 
-  const mergedText = [smartScrap.mergedText, ocrText]
+  const transcript = input.youtubeMeta ? await fetchYouTubeTranscript(input.youtubeMeta.videoId) : { text: '', available: false, error: null as string | null }
+  const mergedText = [smartScrap.mergedText, transcript.text, ocrText]
     .filter(Boolean)
     .join('\n\n')
     .slice(0, MAX_TEXT_LENGTH)
   const selectedImageUrls = smartScrap.selectedImageUrls.length > 0
     ? smartScrap.selectedImageUrls
     : input.imageUrls
-  const limitedImageUrls = selectedImageUrls.slice(0, MAX_IMAGE_COUNT)
-  const title = pickTitle(input.pageTitle, mergedText || normalizedSelectedText)
+  const dedupedImageUrls = [...new Set([
+    ...selectedImageUrls,
+    ...(input.youtubeMeta?.thumbnailUrl ? [input.youtubeMeta.thumbnailUrl] : [])
+  ])]
+  const limitedImageUrls = dedupedImageUrls.slice(0, MAX_IMAGE_COUNT)
+  const title = input.youtubeMeta?.videoTitle
+    ? normalizeText(input.youtubeMeta.videoTitle).slice(0, 90)
+    : pickTitle(pageTitle, mergedText || normalizedSelectedText)
   const capturedAt = new Date().toISOString()
 
   const images: ScrapAsset[] = []
@@ -115,9 +133,9 @@ export async function captureScrapToNotion(input: {
 
   const notionResult = await createScrapPageInNotion({
     title,
-    pageTitle: normalizeText(input.pageTitle) || 'Untitled page',
-    sourceUrl: input.pageUrl,
-    sourceHost: input.sourceHost,
+    pageTitle,
+    sourceUrl,
+    sourceHost,
     ocrText,
     mergedText,
     captureType:
@@ -133,6 +151,9 @@ export async function captureScrapToNotion(input: {
     capturedAt,
     selectionRect: smartScrap.selectionRect,
     imageFiles: notionImageFiles,
+    youtubeMeta: input.youtubeMeta,
+    transcriptText: transcript.text,
+    transcriptStatus: transcript.available ? 'available' : transcript.error ? 'unavailable' : 'not_requested',
     screenshotFile: screenshotBuffer && screenshotAsset
       ? {
           buffer: screenshotBuffer,
@@ -157,9 +178,9 @@ export async function captureScrapToNotion(input: {
     id: createId('scrap'),
     notionPageId: notionResult.pageId,
     title,
-    pageTitle: normalizeText(input.pageTitle) || 'Untitled page',
-    sourceUrl: input.pageUrl,
-    sourceHost: input.sourceHost,
+    pageTitle,
+    sourceUrl,
+    sourceHost,
     selectedText: normalizedSelectedText,
     anchorChunks: [],
     contextChunks: [],
@@ -181,7 +202,15 @@ export async function captureScrapToNotion(input: {
     screenshot: hydratedScreenshot,
     metadata: {
       rect: input.rect ?? null,
-      imageUrls: limitedImageUrls
+      imageUrls: limitedImageUrls,
+      youtube: input.youtubeMeta
+        ? {
+            ...input.youtubeMeta,
+            transcriptAvailable: transcript.available,
+            transcriptStatus: transcript.available ? 'available' : 'unavailable',
+            transcriptError: transcript.error
+          }
+        : null
     },
     capturedAt
   })
