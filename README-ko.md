@@ -28,13 +28,9 @@ ClipWiki는 다음 학습 흐름을 목표로 합니다.
 
 ## 데모 자산
 
-### GIF
+![ClipWiki 메인 화면](./docs/screenshots/clipwiki-main-20260414.png)
 
-![ClipWiki 데모](./docs/demo/clipwiki-demo-20260414d.gif)
-
-### 자산
-
-- [clipwiki-demo-20260414d.gif](./docs/demo/clipwiki-demo-20260414d.gif)
+![ClipWiki Graphify](./docs/screenshots/clipwiki-graphify-20260414.png)
 
 ## 동작 방식
 
