@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { listScraps, listWikiDrafts, setSystemMetaValue } from '@/lib/server/db'
+import { rebuildGraphifyPayload } from '@/lib/server/graphify'
 import { createWikiDraftsFromSelection, type WikiDraftProgress } from '@/lib/server/openai'
 
 export const runtime = 'nodejs'
@@ -61,6 +62,7 @@ export async function POST() {
           const drafts = await createWikiDraftsFromSelection('', scraps, 'general', async (progress: WikiDraftProgress) => {
             send({ type: 'progress', ...progress })
           })
+          const graphPayload = await rebuildGraphifyPayload()
 
           setSystemMetaValue('wiki:last_manual_run_at', new Date().toISOString())
 
@@ -71,7 +73,8 @@ export async function POST() {
               blocked: false,
               message: buildMessage(drafts),
               draft: drafts[0] ?? null,
-              drafts
+              drafts,
+              graphPayload
             }
           })
         } catch (error) {

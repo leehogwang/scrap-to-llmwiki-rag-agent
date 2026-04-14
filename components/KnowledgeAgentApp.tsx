@@ -384,6 +384,9 @@ export default function KnowledgeAgentApp() {
 
   const handleWikiGenerationResponse = useCallback(async (payload: WikiGenerationResponse, options: { appendMessage?: boolean } = {}) => {
     const appendMessage = options.appendMessage ?? true
+    if (payload.graphPayload) {
+      setGraphify(payload.graphPayload)
+    }
     const drafts = extractGeneratedDrafts(payload)
     if (drafts.length === 0) {
       if (appendMessage) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getScrap, listScraps, listWikiDrafts } from '@/lib/server/db'
+import { rebuildGraphifyPayload } from '@/lib/server/graphify'
 import { createWikiDraftsFromSelection } from '@/lib/server/openai'
 
 export const runtime = 'nodejs'
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
           const drafts = await createWikiDraftsFromSelection(parsed.topic, scraps, 'general', async (progress) => {
             send({ type: 'progress', ...progress })
           })
+          const graphPayload = await rebuildGraphifyPayload()
 
           const draft = drafts[0] ?? null
           if (!draft) {
@@ -87,7 +89,8 @@ export async function POST(request: NextRequest) {
               payload: {
                 blocked: false,
                 message: buildGenerationMessage([], parsed.topic, skippedUsedCount),
-                drafts: []
+                drafts: [],
+                graphPayload
               }
             })
             controller.close()
@@ -100,7 +103,8 @@ export async function POST(request: NextRequest) {
               blocked: false,
               message: buildGenerationMessage(drafts, parsed.topic, skippedUsedCount),
               draft,
-              drafts
+              drafts,
+              graphPayload
             }
           })
         } catch (error) {
