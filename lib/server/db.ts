@@ -47,6 +47,12 @@ type DraftRow = {
   updated_at: string
 }
 
+type MetaRow = {
+  key: string
+  value: string
+  updated_at: string
+}
+
 function ensureDb() {
   if (dbInstance) return dbInstance
   fs.mkdirSync(dataDir, { recursive: true })
@@ -96,6 +102,12 @@ function ensureDb() {
     );
 
     CREATE INDEX IF NOT EXISTS wiki_drafts_updated_idx ON wiki_drafts(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS system_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `)
   dbInstance = db
   return db
@@ -469,4 +481,27 @@ export function deleteWikiDrafts(ids: string[]) {
   const placeholders = ids.map(() => '?').join(', ')
   const result = db.prepare(`DELETE FROM wiki_drafts WHERE id IN (${placeholders})`).run(...ids)
   return result.changes
+}
+
+export function getSystemMeta(key: string) {
+  const db = ensureDb()
+  const row = db.prepare('SELECT * FROM system_meta WHERE key = ?').get(key) as MetaRow | undefined
+  return row ?? null
+}
+
+export function getSystemMetaValue(key: string) {
+  return getSystemMeta(key)?.value ?? null
+}
+
+export function setSystemMetaValue(key: string, value: string) {
+  const db = ensureDb()
+  const updatedAt = nowIso()
+  db.prepare(`
+    INSERT INTO system_meta (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `).run(key, value, updatedAt)
+  return getSystemMeta(key)
 }

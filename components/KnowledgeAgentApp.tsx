@@ -109,6 +109,7 @@ export default function KnowledgeAgentApp() {
     }
   ])
   const chatLogRef = useRef<HTMLDivElement | null>(null)
+  const automationBootedRef = useRef(false)
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter') return
@@ -149,6 +150,55 @@ export default function KnowledgeAgentApp() {
     void refresh('')
   }, [refresh])
 
+  const runDailyAutomation = useCallback(async (options: { forceGraph?: boolean; forceWiki?: boolean; appendMessage?: boolean } = {}) => {
+    const appendMessage = options.appendMessage ?? true
+    if (options.forceGraph) setGraphLoading(true)
+    try {
+      const response = await fetch('/api/automation/daily', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          forceGraph: options.forceGraph ?? false,
+          forceWiki: options.forceWiki ?? false
+        })
+      })
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload.error ?? '자동 계산에 실패했습니다.')
+      }
+
+      if (payload.graphPayload) {
+        setGraphify(payload.graphPayload)
+      }
+
+      if (payload.graphRebuilt || payload.wikiGenerated) {
+        await refresh(scrapQuery)
+      }
+
+      if (appendMessage) {
+        const parts = [
+          payload.graphRebuilt ? '그래프를 갱신했습니다.' : '',
+          payload.wikiGenerated ? `위키 초안 ${payload.wikiDraftCount}개를 자동 생성했습니다.` : ''
+        ].filter(Boolean)
+        if (parts.length > 0) {
+          setMessages((current) => [...current, { role: 'system', text: parts.join(' ') }])
+        }
+      }
+    } catch (error) {
+      if (appendMessage) {
+        setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '자동 계산에 실패했습니다.') }])
+      }
+    } finally {
+      if (options.forceGraph) setGraphLoading(false)
+    }
+  }, [refresh, scrapQuery])
+
+  useEffect(() => {
+    if (automationBootedRef.current) return
+    automationBootedRef.current = true
+    void runDailyAutomation({ appendMessage: true })
+  }, [runDailyAutomation])
+
   async function openScrap(id: string) {
     const response = await fetch(`/api/scraps/${id}`)
     const payload = await response.json()
@@ -178,35 +228,6 @@ export default function KnowledgeAgentApp() {
     const payload = await response.json()
     if (response.ok) {
       setDetail({ type: 'graph', item: payload as GraphifyNodeDetail })
-    }
-  }
-
-  async function rebuildGraph() {
-    setGraphLoading(true)
-    try {
-      const response = await fetch('/api/graphify/rebuild', {
-        method: 'POST'
-      })
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(payload.error ?? '그래프 재빌드에 실패했습니다.')
-      }
-      setGraphify(payload as GraphifyPayload)
-      setMessages((current) => [
-        ...current,
-        {
-          role: 'system',
-          text: `Graphify를 갱신했습니다. 클러스터 ${payload.clusters.length}개, 노드 ${payload.nodes.length}개를 반영했습니다.`
-        }
-      ])
-      setTab('graphify')
-    } catch (error) {
-      setMessages((current) => [
-        ...current,
-        { role: 'system', text: normalizeUiError(error, 'Graphify를 갱신하지 못했습니다.') }
-      ])
-    } finally {
-      setGraphLoading(false)
     }
   }
 
@@ -571,6 +592,12 @@ export default function KnowledgeAgentApp() {
               </div>
             ) : null}
             <div className='toolbar-stats'>
+              <button className='action-button' onClick={() => void runDailyAutomation({ forceGraph: true, appendMessage: true })} disabled={graphLoading || loading} type='button'>
+                {graphLoading ? '그래프 계산 중...' : '그래프 계산'}
+              </button>
+              <button className='action-button' onClick={() => void runDailyAutomation({ forceWiki: true, appendMessage: true })} disabled={loading} type='button'>
+                위키 정리
+              </button>
               <span className='muted small'>Captured scraps: {scraps.length}</span>
               <span className='muted small'>Wiki drafts: {wikiDrafts.length}</span>
               <span className='muted small'>Updated: {lastUpdatedAt ?? 'never'}</span>
@@ -790,8 +817,6 @@ export default function KnowledgeAgentApp() {
           {tab === 'graphify' ? (
             <GraphifyView
               payload={graphify}
-              loading={graphLoading}
-              onRebuild={rebuildGraph}
               onOpenNode={openGraphNode}
             />
           ) : null}

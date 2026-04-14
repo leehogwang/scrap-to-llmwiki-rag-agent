@@ -211,6 +211,143 @@ function buildClusters(nodes: GraphifyNode[], edges: GraphifyEdge[]) {
   return clusters
 }
 
+async function inferSurprisingConnections(
+  nodes: GraphifyNode[],
+  edges: GraphifyEdge[],
+  drafts: WikiDraft[]
+) {
+  const wikiRecords = drafts
+    .map((draft) => {
+      const node = nodes.find((candidate) => candidate.id === `wiki:${draft.id}`)
+      if (!node) return null
+      return {
+        nodeId: node.id,
+        label: node.label,
+        title: draft.title,
+        topic: draft.topic,
+        summary: draft.summary,
+        keyConcepts: draft.keyConcepts.slice(0, 8)
+      }
+    })
+    .filter(Boolean) as Array<{
+      nodeId: string
+      label: string
+      title: string
+      topic: string
+      summary: string
+      keyConcepts: string[]
+    }>
+
+  if (wikiRecords.length < 2) {
+    edges.forEach((edge) => {
+      edge.surprising = false
+      edge.surprisingScore = undefined
+    })
+    return []
+  }
+
+  const response = await client.chat.completions.create({
+    model: defaultModel,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You identify surprising knowledge graph connections between wiki summaries.',
+          'Only consider wiki-to-wiki links.',
+          'Use the overall idea, design pattern, conceptual overlap, or hidden strategic similarity.',
+          'Do not rely on shallow lexical similarity alone.',
+          'Allowed relations: related_to, supports, conflicts_with, about.',
+          'Return only JSON in this format: {"surprising_edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"reason":string}]}',
+          'Use the provided wiki node ids exactly. Return at most 8 surprising edges.'
+        ].join(' ')
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ wikis: wikiRecords })
+      }
+    ]
+  })
+
+  const raw = response.choices[0]?.message?.content
+  if (!raw) {
+    edges.forEach((edge) => {
+      edge.surprising = false
+      edge.surprisingScore = undefined
+    })
+    return []
+  }
+
+  const parsed = JSON.parse(raw) as {
+    surprising_edges?: Array<{
+      leftId: string
+      rightId: string
+      relation: string
+      confidence?: number
+      reason?: string
+    }>
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const wikiIdSet = new Set(wikiRecords.map((wiki) => wiki.nodeId))
+  const nextSurprisingIds = new Set<string>()
+  const surprisingConnections: GraphifySurprisingConnection[] = []
+
+  edges.forEach((edge) => {
+    edge.surprising = false
+    edge.surprisingScore = undefined
+  })
+
+  for (const item of parsed.surprising_edges ?? []) {
+    if (!wikiIdSet.has(item.leftId) || !wikiIdSet.has(item.rightId)) continue
+    if (item.leftId === item.rightId) continue
+    if (!['related_to', 'supports', 'conflicts_with', 'about'].includes(item.relation)) continue
+
+    const confidence = typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.72
+    const edgeId = `${item.leftId < item.rightId ? item.leftId : item.rightId}::${item.relation}::${item.leftId < item.rightId ? item.rightId : item.leftId}`
+    let edge = edges.find((current) => current.id === edgeId)
+    if (!edge) {
+      edge = makeEdge(item.leftId, item.rightId, item.relation as GraphifyEdgeRelation, {
+        provenance: 'INFERRED',
+        confidence,
+        weight: Math.max(1, Math.round(confidence * 3)),
+        explanation: item.reason?.slice(0, 240)
+      })
+      edges.push(edge)
+    } else {
+      edge.explanation = item.reason?.slice(0, 240) ?? edge.explanation
+      edge.confidence = Math.max(edge.confidence, confidence)
+    }
+    edge.surprising = true
+    edge.surprisingScore = confidence
+    nextSurprisingIds.add(edge.id)
+
+    const left = nodeById.get(item.leftId)
+    const right = nodeById.get(item.rightId)
+    if (!left || !right) continue
+    surprisingConnections.push({
+      edgeId: edge.id,
+      sourceId: left.id,
+      sourceLabel: left.label,
+      targetId: right.id,
+      targetLabel: right.label,
+      relation: edge.relation,
+      confidence,
+      explanation: item.reason?.slice(0, 240)
+    })
+  }
+
+  edges.forEach((edge) => {
+    if (!nextSurprisingIds.has(edge.id)) {
+      edge.surprising = false
+      edge.surprisingScore = undefined
+    }
+  })
+
+  return surprisingConnections.slice(0, 8)
+}
+
 function computeDegrees(nodes: GraphifyNode[], edges: GraphifyEdge[]) {
   const degreeMap = new Map<string, number>()
   nodes.forEach((node) => degreeMap.set(node.id, 0))
@@ -396,29 +533,18 @@ export async function rebuildGraphifyPayload() {
   const edgeList = [...edges.values()]
   computeDegrees(nodeList, edgeList)
   const clusters = buildClusters(nodeList, edgeList)
-
-  const godNodes = nodeList
+  let godNodes = nodeList
     .slice()
     .sort((left, right) => right.degree - left.degree)
     .slice(0, 5)
     .map((node) => ({ nodeId: node.id, label: node.label, degree: node.degree, kind: node.kind } satisfies GraphifyGodNode))
-
-  const clusterIdByNode = new Map(nodeList.map((node) => [node.id, node.clusterId]))
-  const surprisingConnections = edgeList
-    .filter((edge) => edge.provenance === 'INFERRED')
-    .filter((edge) => clusterIdByNode.get(edge.source) !== clusterIdByNode.get(edge.target))
-    .sort((left, right) => right.confidence - left.confidence)
-    .slice(0, 8)
-    .map((edge) => ({
-      edgeId: edge.id,
-      sourceId: edge.source,
-      sourceLabel: nodes.get(edge.source)?.label ?? edge.source,
-      targetId: edge.target,
-      targetLabel: nodes.get(edge.target)?.label ?? edge.target,
-      relation: edge.relation,
-      confidence: edge.confidence,
-      explanation: edge.explanation
-    } satisfies GraphifySurprisingConnection))
+  const surprisingConnections = await inferSurprisingConnections(nodeList, edgeList, drafts)
+  computeDegrees(nodeList, edgeList)
+  godNodes = nodeList
+    .slice()
+    .sort((left, right) => right.degree - left.degree)
+    .slice(0, 5)
+    .map((node) => ({ nodeId: node.id, label: node.label, degree: node.degree, kind: node.kind } satisfies GraphifyGodNode))
 
   const payload: GraphifyPayload = {
     nodes: nodeList,

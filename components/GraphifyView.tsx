@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import {
   Background,
   Controls,
+  Position,
   ReactFlow,
   type Edge,
   type Node
@@ -13,8 +14,6 @@ import type { GraphifyNode as GraphNode, GraphifyPayload } from '@/lib/types'
 
 type GraphifyViewProps = {
   payload: GraphifyPayload | null
-  loading: boolean
-  onRebuild: () => Promise<void> | void
   onOpenNode: (node: GraphNode) => void
 }
 
@@ -81,6 +80,43 @@ function estimatedLabelBox(node: GraphNode) {
   )
   const height = node.kind === 'wiki' ? 36 : 31
   return { width, height }
+}
+
+function resolveNodeHandlePositions(
+  nodeId: string,
+  positions: Map<string, { x: number; y: number }>,
+  edges: Array<{ source: string; target: string }>
+) {
+  const current = positions.get(nodeId)
+  if (!current) {
+    return {
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top
+    }
+  }
+
+  const neighborYs = edges
+    .flatMap((edge) => {
+      if (edge.source === nodeId) return [positions.get(edge.target)?.y]
+      if (edge.target === nodeId) return [positions.get(edge.source)?.y]
+      return []
+    })
+    .filter((value): value is number => typeof value === 'number')
+
+  if (neighborYs.length === 0) {
+    return {
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top
+    }
+  }
+
+  const averageNeighborY = neighborYs.reduce((sum, value) => sum + value, 0) / neighborYs.length
+  const neighborsMostlyAbove = averageNeighborY < current.y
+
+  return {
+    sourcePosition: neighborsMostlyAbove ? Position.Top : Position.Bottom,
+    targetPosition: neighborsMostlyAbove ? Position.Bottom : Position.Top
+  }
 }
 
 function clusterCenters(
@@ -399,9 +435,12 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
 
   const layoutNodes: Node[] = seedNodes.map((node) => {
     const cluster = payload.clusters.find((item) => item.id === node.clusterId)
+    const handles = resolveNodeHandlePositions(node.id, forcePositions, edges)
     return {
       id: node.id,
       position: forcePositions.get(node.id) ?? { x: node.x, y: node.y },
+      sourcePosition: handles.sourcePosition,
+      targetPosition: handles.targetPosition,
       data: {
         label: (
           <button
@@ -433,32 +472,56 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
     }
   })
 
-  const layoutEdges: Edge[] = edges.map((edge) => ({
+  const sortedEdges = [...edges].sort((left, right) => Number(left.surprising) - Number(right.surprising))
+
+  const layoutEdges: Edge[] = sortedEdges.map((edge) => ({
     ...(function () {
       const sourceNode = allowedNodes.find((node) => node.id === edge.source)
       const targetNode = allowedNodes.find((node) => node.id === edge.target)
       const sameCluster = sourceNode?.clusterId && sourceNode.clusterId === targetNode?.clusterId
+      const surprising = Boolean(edge.surprising)
       const stroke = sameCluster
-        ? edge.provenance === 'INFERRED'
-          ? 'rgba(136, 145, 154, 0.32)'
-          : 'rgba(108, 117, 126, 0.24)'
-        : edge.provenance === 'INFERRED'
-          ? 'rgba(92, 100, 107, 0.22)'
-          : 'rgba(76, 82, 88, 0.14)'
+        ? surprising
+          ? 'rgba(191, 58, 58, 0.94)'
+          : edge.provenance === 'INFERRED'
+            ? 'rgba(136, 145, 154, 0.32)'
+            : 'rgba(108, 117, 126, 0.24)'
+        : surprising
+          ? 'rgba(191, 58, 58, 0.86)'
+          : edge.provenance === 'INFERRED'
+            ? 'rgba(92, 100, 107, 0.22)'
+            : 'rgba(76, 82, 88, 0.14)'
       return {
     id: edge.id,
     source: edge.source,
     target: edge.target,
     type: 'default',
     animated: false,
+    zIndex: surprising ? 10 : 1,
     style: {
       stroke,
       strokeLinecap: 'round',
       strokeLinejoin: 'round',
-      strokeDasharray: edge.provenance === 'INFERRED' ? '3 7' : edge.provenance === 'AMBIGUOUS' ? '1 8' : undefined,
-      opacity: edge.provenance === 'AMBIGUOUS' ? 0.16 : edge.provenance === 'INFERRED' ? 0.58 : 0.74,
-      strokeWidth: Math.max(0.95, Math.min(2.1, 0.8 + edge.weight * 0.24))
-    }
+      pointerEvents: 'none',
+      strokeDasharray: surprising
+        ? '1 0'
+        : edge.provenance === 'INFERRED'
+          ? '3 7'
+          : edge.provenance === 'AMBIGUOUS'
+            ? '1 8'
+            : undefined,
+      opacity: surprising
+        ? 0.95
+        : edge.provenance === 'AMBIGUOUS'
+          ? 0.16
+          : edge.provenance === 'INFERRED'
+            ? 0.58
+            : 0.74,
+      strokeWidth: surprising
+        ? Math.max(2.2, Math.min(3.5, 1.55 + (edge.surprisingScore ?? edge.weight) * 0.32))
+        : Math.max(0.95, Math.min(2.1, 0.8 + edge.weight * 0.24))
+    },
+    interactionWidth: 0
       }
     })()
   }))
@@ -466,7 +529,7 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
   return { nodes: layoutNodes, edges: layoutEdges, clusters }
 }
 
-export default function GraphifyView({ payload, loading, onRebuild, onOpenNode }: GraphifyViewProps) {
+export default function GraphifyView({ payload, onOpenNode }: GraphifyViewProps) {
   const [clusterFilter, setClusterFilter] = useState('all')
   const [kindFilter, setKindFilter] = useState<Set<GraphNode['kind']>>(new Set(['scrap', 'wiki', 'claim', 'concept']))
 
@@ -552,7 +615,7 @@ export default function GraphifyView({ payload, loading, onRebuild, onOpenNode }
 
       {safePayload.nodes.length === 0 ? (
         <div className='empty graph-empty'>
-          그래프 캐시가 없습니다. 아래 Graphify 캔버스에서 그래프를 다시 불러오세요.
+          그래프 캐시가 없습니다. 상단의 그래프 계산 버튼으로 한 번 생성해 주세요.
         </div>
       ) : (
         <div className='graph-canvas graph-canvas-light'>

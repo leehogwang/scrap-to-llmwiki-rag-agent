@@ -180,6 +180,8 @@ export interface GraphifyEdge {
   confidence: number
   weight: number
   explanation?: string
+  surprising?: boolean
+  surprisingScore?: number
 }
 
 export interface GraphifyCluster {
