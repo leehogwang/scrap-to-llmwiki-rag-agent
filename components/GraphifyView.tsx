@@ -484,11 +484,11 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
 
     const baseStroke = sameCluster
       ? edge.provenance === 'INFERRED'
-        ? 'rgba(126, 136, 146, 0.18)'
-        : 'rgba(104, 112, 120, 0.14)'
+        ? 'rgba(132, 143, 154, 0.36)'
+        : 'rgba(115, 124, 133, 0.32)'
       : edge.provenance === 'INFERRED'
-        ? 'rgba(90, 98, 104, 0.12)'
-        : 'rgba(76, 82, 88, 0.08)'
+        ? 'rgba(104, 112, 118, 0.28)'
+        : 'rgba(92, 99, 106, 0.24)'
 
     const baseEdge: Edge = {
       id: edge.id,
@@ -509,11 +509,11 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
             ? '1 10'
             : undefined,
         opacity: edge.provenance === 'AMBIGUOUS'
-          ? 0.08
+          ? 0.24
           : edge.provenance === 'INFERRED'
-            ? 0.18
-            : 0.24,
-        strokeWidth: Math.max(0.7, Math.min(1.3, 0.64 + edge.weight * 0.12))
+            ? 0.42
+            : 0.52,
+        strokeWidth: Math.max(1.15, Math.min(2.05, 1.02 + edge.weight * 0.18))
       },
       interactionWidth: 0
     }
