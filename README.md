@@ -37,11 +37,11 @@ The system follows a bounded agent pattern:
 
 ### Animated demo
 
-![ClipWiki demo](./docs/demo/clipwiki-demo.gif)
+![ClipWiki demo](./docs/demo/clipwiki-demo-graphify.gif)
 
 ### Asset
 
-- [clipwiki-demo.gif](./docs/demo/clipwiki-demo.gif)
+- [clipwiki-demo-graphify.gif](./docs/demo/clipwiki-demo-graphify.gif)
 
 ## How It Works
 
