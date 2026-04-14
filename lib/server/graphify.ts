@@ -6,6 +6,7 @@ import {
   listWikiDrafts
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
+import { getCodexAuth } from '@/lib/server/codex-auth'
 import type {
   GraphifyCluster,
   GraphifyEdge,
@@ -23,7 +24,25 @@ import type {
 const dataDir = path.join(process.cwd(), 'data')
 const cachePath = path.join(dataDir, 'graphify-cache.json')
 const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
-const client = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') })
+const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
+const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+
+function buildClient(): OpenAI {
+  if (useCodexAuth) {
+    const auth = getCodexAuth()
+    if (auth) {
+      return new OpenAI({
+        apiKey: auth.accessToken,
+        baseURL: CODEX_BASE_URL,
+        defaultHeaders: { 'ChatGPT-Account-Id': auth.accountId }
+      })
+    }
+  }
+  // Fallback to standard OpenAI API key
+  return new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') })
+}
+
+const client = buildClient()
 
 const clusterColors = ['#56728f', '#a57758', '#5f8376', '#8a6576', '#6f67a0', '#7f8758', '#4f7f86', '#9a654f']
 
@@ -246,31 +265,42 @@ async function inferSurprisingConnections(
     return []
   }
 
-  const response = await client.chat.completions.create({
-    model: defaultModel,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'You identify surprising knowledge graph connections between wiki summaries.',
-          'Only consider wiki-to-wiki links.',
-          'Use the overall idea, design pattern, conceptual overlap, or hidden strategic similarity.',
-          'Do not rely on shallow lexical similarity alone.',
-          'Allowed relations: related_to, supports, conflicts_with, about.',
-          'Return only JSON in this format: {"surprising_edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"reason":string}]}',
-          'Use the provided wiki node ids exactly. Return at most 8 surprising edges.'
-        ].join(' ')
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({ wikis: wikiRecords })
-      }
-    ]
-  })
+  const systemPrompt = [
+    'You identify surprising knowledge graph connections between wiki summaries.',
+    'Only consider wiki-to-wiki links.',
+    'Use the overall idea, design pattern, conceptual overlap, or hidden strategic similarity.',
+    'Do not rely on shallow lexical similarity alone.',
+    'Allowed relations: related_to, supports, conflicts_with, about.',
+    'Return only JSON in this format: {"surprising_edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"reason":string}]}',
+    'Use the provided wiki node ids exactly. Return at most 8 surprising edges.'
+  ].join(' ')
 
-  const raw = response.choices[0]?.message?.content
+  let raw: string | undefined
+
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API ---
+    const response = await (client as any).responses.create({
+      model: defaultModel,
+      temperature: 0,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: JSON.stringify({ wikis: wikiRecords }) }],
+      text: { format: { type: 'json_object' } },
+      store: false
+    })
+    raw = response.output_text
+  } else {
+    // --- 기존: Chat Completions API ---
+    const response = await client.chat.completions.create({
+      model: defaultModel,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: JSON.stringify({ wikis: wikiRecords }) }
+      ]
+    })
+    raw = response.choices[0]?.message?.content ?? undefined
+  }
   if (!raw) {
     edges.forEach((edge) => {
       edge.surprising = false
@@ -384,28 +414,39 @@ async function inferSemanticEdges(nodes: GraphifyNode[], edges: GraphifyEdge[]) 
 
   if (candidates.length === 0) return []
 
-  const response = await client.chat.completions.create({
-    model: defaultModel,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'You classify possible graph edges between knowledge nodes.',
-          'Only classify the supplied candidate pairs.',
-          'Allowed relations: related_to, supports, conflicts_with, unrelated.',
-          'Return JSON only: {"edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"explanation":string}]}'
-        ].join(' ')
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({ candidates })
-      }
-    ]
-  })
+  const systemPrompt = [
+    'You classify possible graph edges between knowledge nodes.',
+    'Only classify the supplied candidate pairs.',
+    'Allowed relations: related_to, supports, conflicts_with, unrelated.',
+    'Return JSON only: {"edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"explanation":string}]}'
+  ].join(' ')
 
-  const raw = response.choices[0]?.message?.content
+  let raw: string | undefined
+
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API ---
+    const response = await (client as any).responses.create({
+      model: defaultModel,
+      temperature: 0,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: JSON.stringify({ candidates }) }],
+      text: { format: { type: 'json_object' } },
+      store: false
+    })
+    raw = response.output_text
+  } else {
+    // --- 기존: Chat Completions API ---
+    const response = await client.chat.completions.create({
+      model: defaultModel,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: JSON.stringify({ candidates }) }
+      ]
+    })
+    raw = response.choices[0]?.message?.content ?? undefined
+  }
   if (!raw) return []
   const parsed = JSON.parse(raw) as { edges?: Array<{ leftId: string; rightId: string; relation: string; confidence?: number; explanation?: string }> }
   const validIds = new Set(candidates.flatMap((candidate) => [candidate.leftId, candidate.rightId]))

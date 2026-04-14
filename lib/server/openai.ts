@@ -15,6 +15,7 @@ import {
   updateWikiDraftStatus
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
+import { getCodexAuth } from '@/lib/server/codex-auth'
 import { getGraphContextForPrompt } from '@/lib/server/graphify'
 import { publishWikiDraftToNotion } from '@/lib/server/notion'
 import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
@@ -22,10 +23,34 @@ import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
 const moderationModel = getOptionalEnv('OPENAI_MODERATION_MODEL', 'omni-moderation-latest')
 const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
 const maxSelectedScraps = 100
+const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
+const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
 
-const client = new OpenAI({
-  apiKey: getRequiredEnv('OPENAI_API_KEY')
-})
+function buildAiClient(): OpenAI {
+  if (useCodexAuth) {
+    const auth = getCodexAuth()
+    if (auth) {
+      console.log('[ClipWiki] Using codex auth → chatgpt.com backend')
+      return new OpenAI({
+        apiKey: auth.accessToken,
+        baseURL: CODEX_BASE_URL,
+        defaultHeaders: { 'ChatGPT-Account-Id': auth.accountId }
+      })
+    }
+    console.warn('[ClipWiki] USE_CODEX_AUTH=true but ~/.codex/auth.json not found — falling back to API key')
+  }
+  // Fallback to standard OpenAI API key
+  return new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') })
+}
+
+function buildModerationClient(): OpenAI | null {
+  const apiKey = getOptionalEnv('OPENAI_API_KEY', '')
+  // Moderation API is not available on chatgpt.com backend — always use standard API
+  return apiKey ? new OpenAI({ apiKey }) : null
+}
+
+const aiClient = buildAiClient()
+const moderationClient = buildModerationClient()
 
 const searchScrapsArgs = z.object({
   query: z.string().min(2).max(500),
@@ -150,29 +175,41 @@ function cleanSections(value: unknown) {
 }
 
 async function translateDraftPayloadToKorean(rawDraft: Record<string, unknown>) {
-  const response = await client.chat.completions.create({
-    model: defaultModel,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'Translate the supplied wiki draft JSON into Korean.',
-          'Keep the JSON schema identical.',
-          'Translate title, topic, summary, keyConcepts, claims.claim, claims.evidence, openQuestions, sections.heading, sections.paragraphs, sections.bullets into Korean.',
-          'Preserve mode, supportLevel, and relatedScrapIds exactly as-is.',
-          'Return JSON only.'
-        ].join(' ')
-      },
-      {
-        role: 'user',
-        content: JSON.stringify(rawDraft)
-      }
-    ]
-  })
+  const systemPrompt = [
+    'Translate the supplied wiki draft JSON into Korean.',
+    'Keep the JSON schema identical.',
+    'Translate title, topic, summary, keyConcepts, claims.claim, claims.evidence, openQuestions, sections.heading, sections.paragraphs, sections.bullets into Korean.',
+    'Preserve mode, supportLevel, and relatedScrapIds exactly as-is.',
+    'Return JSON only.'
+  ].join(' ')
 
-  const translated = response.choices[0]?.message?.content
+  let translated: string | null | undefined
+
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API ---
+    const response = await (aiClient as any).responses.create({
+      model: defaultModel,
+      temperature: 0,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: JSON.stringify(rawDraft) }],
+      text: { format: { type: 'json_object' } },
+      store: false
+    })
+    translated = response.output_text
+  } else {
+    // --- 기존: Chat Completions API ---
+    const response = await aiClient.chat.completions.create({
+      model: defaultModel,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: JSON.stringify(rawDraft) }
+      ]
+    })
+    translated = response.choices[0]?.message?.content
+  }
+
   if (!translated) return rawDraft
   return JSON.parse(translated) as Record<string, unknown>
 }
@@ -271,7 +308,8 @@ function buildSystemPrompt() {
 }
 
 async function moderate(prompt: string) {
-  const result = await client.moderations.create({
+  if (!moderationClient) return false
+  const result = await moderationClient.moderations.create({
     model: moderationModel,
     input: prompt
   })
@@ -452,27 +490,41 @@ async function createOrMergeWikiDraftFromScraps(topic: string, scraps: Scrap[], 
     })
   ].filter(Boolean).join('\n\n')
 
-  const response = await client.chat.completions.create({
-    model: defaultModel,
-    temperature: 0.2,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'You produce structured wiki drafts from saved study scraps.',
-          'Write the draft in Korean.',
-          'Be factual, concise, and citation-aware.',
-          'If the requested topic is empty, infer a good Korean title, Korean topic, and Korean section structure from the scraps.',
-          'Do not complain that the topic is missing.',
-          'Return only JSON.'
-        ].join(' ')
-      },
-      { role: 'user', content: prompt }
-    ]
-  })
+  const systemPrompt = [
+    'You produce structured wiki drafts from saved study scraps.',
+    'Write the draft in Korean.',
+    'Be factual, concise, and citation-aware.',
+    'If the requested topic is empty, infer a good Korean title, Korean topic, and Korean section structure from the scraps.',
+    'Do not complain that the topic is missing.',
+    'Return only JSON.'
+  ].join(' ')
 
-  const raw = response.choices[0]?.message?.content
+  let raw: string | undefined
+
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API ---
+    const response = await (aiClient as any).responses.create({
+      model: defaultModel,
+      temperature: 0.2,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: prompt }],
+      text: { format: { type: 'json_object' } },
+      store: false
+    })
+    raw = response.output_text
+  } else {
+    // --- 기존: Chat Completions API ---
+    const response = await aiClient.chat.completions.create({
+      model: defaultModel,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
+    })
+    raw = response.choices[0]?.message?.content ?? undefined
+  }
   if (!raw) {
     throw new Error('Draft generation returned no content')
   }
@@ -617,35 +669,46 @@ function excludeAlreadyAssignedScraps(scraps: Scrap[]) {
 }
 
 async function clusterScrapsForDrafts(scraps: Scrap[]) {
-  const response = await client.chat.completions.create({
-    model: defaultModel,
-    temperature: 0.1,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'Group the supplied scraps into coherent wiki draft clusters.',
-          '응답은 한국어 제목/주제를 사용하세요.',
-          '서로 다른 주제의 스크랩은 절대 한 그룹으로 억지로 합치지 마세요.',
-          '주제, 문제 영역, 기술 개념, 도메인이 다르면 분리하세요.',
-          'Use multiple groups whenever the scraps cover different topics.',
-          'Only return one group when the scraps clearly belong to the same study topic.',
-          'Every scrap id must appear in exactly one group.',
-          'Prefer 1 to 6 groups.',
-          'Return strict JSON: { "groups": [{ "title": string, "topic": string, "scrapIds": string[], "mode": string }] }.'
-        ].join(' ')
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          scraps: scraps.map(trimScrap)
-        })
-      }
-    ]
-  })
+  const systemPrompt = [
+    'Group the supplied scraps into coherent wiki draft clusters.',
+    '응답은 한국어 제목/주제를 사용하세요.',
+    '서로 다른 주제의 스크랩은 절대 한 그룹으로 억지로 합치지 마세요.',
+    '주제, 문제 영역, 기술 개념, 도메인이 다르면 분리하세요.',
+    'Use multiple groups whenever the scraps cover different topics.',
+    'Only return one group when the scraps clearly belong to the same study topic.',
+    'Every scrap id must appear in exactly one group.',
+    'Prefer 1 to 6 groups.',
+    'Return strict JSON: { "groups": [{ "title": string, "topic": string, "scrapIds": string[], "mode": string }] }.'
+  ].join(' ')
 
-  const raw = response.choices[0]?.message?.content
+  const userInput = JSON.stringify({ scraps: scraps.map(trimScrap) })
+
+  let raw: string | undefined
+
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API ---
+    const response = await (aiClient as any).responses.create({
+      model: defaultModel,
+      temperature: 0.1,
+      instructions: systemPrompt,
+      input: [{ role: 'user', content: userInput }],
+      text: { format: { type: 'json_object' } },
+      store: false
+    })
+    raw = response.output_text
+  } else {
+    // --- 기존: Chat Completions API ---
+    const response = await aiClient.chat.completions.create({
+      model: defaultModel,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userInput }
+      ]
+    })
+    raw = response.choices[0]?.message?.content ?? undefined
+  }
   if (!raw) {
     return [{ title: '', topic: '', scrapIds: scraps.map((scrap) => scrap.id), mode: 'general' as WikiDraft['mode'] }]
   }
@@ -825,76 +888,137 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     .slice(0, 8)
     .map(trimScrap)
 
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: 'system', content: buildSystemPrompt() },
-    {
-      role: 'user',
-      content: [
-        `User prompt: ${input.prompt}`,
-        `Selected scraps: ${JSON.stringify(selectedScraps)}`,
-        `Saved scrap count: ${listScraps(12).length}`,
-        `Graph-matched node ids: ${JSON.stringify(graphContext.matchedNodeIds)}`,
-        `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
-        `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,
-        'Use the prefetched context first. If it is insufficient, call tools to inspect more evidence before answering.'
-      ].join('\n')
-    }
-  ]
+  const userMessageContent = [
+    `User prompt: ${input.prompt}`,
+    `Selected scraps: ${JSON.stringify(selectedScraps)}`,
+    `Saved scrap count: ${listScraps(12).length}`,
+    `Graph-matched node ids: ${JSON.stringify(graphContext.matchedNodeIds)}`,
+    `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
+    `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,
+    'Use the prefetched context first. If it is insufficient, call tools to inspect more evidence before answering.'
+  ].join('\n')
 
   let createdDraft: WikiDraft | null = null
   let createdDrafts: WikiDraft[] = []
 
-  for (let round = 0; round < 6; round += 1) {
-    const response = await client.chat.completions.create({
-      model: defaultModel,
-      temperature: 0.2,
-      messages,
-      tools: [searchTool, getBundleTool, searchWikiTool, getWikiBundleTool, createDraftTool],
-      tool_choice: 'auto'
-    })
+  if (useCodexAuth) {
+    // --- Codex Auth: Responses API tool loop ---
+    const input_list: any[] = [
+      { role: 'user', content: userMessageContent }
+    ]
 
-    const message = response.choices[0]?.message
-    if (!message) {
-      throw new Error('Model returned no message')
-    }
-
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      messages.push({
-        role: 'assistant',
-        content: message.content ?? '',
-        tool_calls: message.tool_calls
+    for (let round = 0; round < 6; round += 1) {
+      const response = await (aiClient as any).responses.create({
+        model: defaultModel,
+        temperature: 0.2,
+        instructions: buildSystemPrompt(),
+        input: input_list,
+        tools: [searchTool, getBundleTool, searchWikiTool, getWikiBundleTool, createDraftTool],
+        store: false
       })
 
-      for (const toolCall of message.tool_calls) {
-        let result: unknown
-        try {
-          result = await executeTool(toolCall.function.name, toolCall.function.arguments)
-          if (toolCall.function.name === 'create_wiki_draft') {
-            createdDrafts = Array.isArray(result) ? result as WikiDraft[] : [result as WikiDraft]
-            createdDraft = createdDrafts[0] ?? null
-          }
-        } catch (error) {
-          result = {
-            error: error instanceof Error ? error.message : 'Tool execution failed',
-            toolName: toolCall.function.name,
-            providedArguments: toolCall.function.arguments
-          }
+      // Extract tool calls from response.output
+      const toolCalls = response.output.filter(
+        (o: any): o is { type: 'function_call'; call_id: string; name: string; arguments: string } =>
+          o.type === 'function_call'
+      )
+
+      if (toolCalls.length > 0) {
+        // Add tool calls to input
+        for (const tc of toolCalls) {
+          input_list.push({ type: 'function_call', call_id: tc.call_id, name: tc.name, arguments: tc.arguments })
         }
 
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(result)
-        })
+        // Execute tools and add results
+        for (const tc of toolCalls) {
+          let result: unknown
+          try {
+            result = await executeTool(tc.name, tc.arguments)
+            if (tc.name === 'create_wiki_draft') {
+              createdDrafts = Array.isArray(result) ? (result as WikiDraft[]) : [result as WikiDraft]
+              createdDraft = createdDrafts[0] ?? null
+            }
+          } catch (error) {
+            result = {
+              error: error instanceof Error ? error.message : 'Tool execution failed',
+              toolName: tc.name,
+              providedArguments: tc.arguments
+            }
+          }
+          input_list.push({ type: 'function_call_output', call_id: tc.call_id, output: JSON.stringify(result) })
+        }
+        continue
       }
-      continue
-    }
 
-    return {
-      blocked: false,
-      message: message.content ?? '응답을 생성하지 못했습니다.',
-      draft: createdDraft,
-      drafts: createdDrafts
+      return {
+        blocked: false,
+        message: response.output_text ?? '응답을 생성하지 못했습니다.',
+        draft: createdDraft,
+        drafts: createdDrafts
+      }
+    }
+  } else {
+    // --- 기존: Chat Completions API tool loop ---
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: 'system', content: buildSystemPrompt() },
+      {
+        role: 'user',
+        content: userMessageContent
+      }
+    ]
+
+    for (let round = 0; round < 6; round += 1) {
+      const response = await aiClient.chat.completions.create({
+        model: defaultModel,
+        temperature: 0.2,
+        messages,
+        tools: [searchTool, getBundleTool, searchWikiTool, getWikiBundleTool, createDraftTool],
+        tool_choice: 'auto'
+      })
+
+      const message = response.choices[0]?.message
+      if (!message) {
+        throw new Error('Model returned no message')
+      }
+
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: message.content ?? '',
+          tool_calls: message.tool_calls
+        })
+
+        for (const toolCall of message.tool_calls) {
+          let result: unknown
+          try {
+            result = await executeTool(toolCall.function.name, toolCall.function.arguments)
+            if (toolCall.function.name === 'create_wiki_draft') {
+              createdDrafts = Array.isArray(result) ? (result as WikiDraft[]) : [result as WikiDraft]
+              createdDraft = createdDrafts[0] ?? null
+            }
+          } catch (error) {
+            result = {
+              error: error instanceof Error ? error.message : 'Tool execution failed',
+              toolName: toolCall.function.name,
+              providedArguments: toolCall.function.arguments
+            }
+          }
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result)
+          })
+        }
+        continue
+      }
+
+      return {
+        blocked: false,
+        message: message.content ?? '응답을 생성하지 못했습니다.',
+        draft: createdDraft,
+        drafts: createdDrafts
+      }
     }
   }
 
