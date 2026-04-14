@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import dynamic from 'next/dynamic'
 import type {
   ChatRequestBody,
+  GraphifyEdgeDetail,
   GraphifyNode,
   GraphifyNodeDetail,
   GraphifyPayload,
@@ -135,6 +136,7 @@ type DetailState =
   | { type: 'scrap'; item: Scrap }
   | { type: 'wiki'; item: WikiDraft }
   | { type: 'graph'; item: GraphifyNodeDetail }
+  | { type: 'graph-edge'; item: GraphifyEdgeDetail }
   | null
 
 export default function KnowledgeAgentApp() {
@@ -336,6 +338,25 @@ export default function KnowledgeAgentApp() {
     if (response.ok) {
       setDetail({ type: 'graph', item: payload as GraphifyNodeDetail })
     }
+  }
+
+  function openGraphEdge(edgeId: string) {
+    if (!graphify) return
+    const edge = graphify.edges.find((item) => item.id === edgeId)
+    if (!edge) return
+    const sourceNode = graphify.nodes.find((item) => item.id === edge.source)
+    const targetNode = graphify.nodes.find((item) => item.id === edge.target)
+    if (!sourceNode || !targetNode) return
+    const surprisingConnection = graphify.surprisingConnections.find((item) => item.edgeId === edgeId)
+    setDetail({
+      type: 'graph-edge',
+      item: {
+        edge,
+        sourceNode,
+        targetNode,
+        surprisingConnection
+      }
+    })
   }
 
   async function bulkApproveDrafts(ids: string[], options: { openAfter?: boolean; appendMessage?: boolean } = {}) {
@@ -1054,6 +1075,7 @@ export default function KnowledgeAgentApp() {
             <GraphifyView
               payload={graphify}
               onOpenNode={openGraphNode}
+              onOpenSurprisingEdge={openGraphEdge}
             />
           ) : null}
 
@@ -1252,6 +1274,61 @@ export default function KnowledgeAgentApp() {
                   </section>
                 </div>
               ) : null}
+            </>
+          ) : null}
+
+          {detail?.type === 'graph-edge' ? (
+            <>
+              <h3 className='title'>놀라운 연결</h3>
+              <div className='meta'>
+                <span>{detail.item.edge.relation}</span>
+                <span>{detail.item.edge.provenance}</span>
+                <span>confidence {detail.item.edge.confidence.toFixed(2)}</span>
+              </div>
+              <div className='wiki-detail'>
+                <section className='wiki-block'>
+                  <h4 className='wiki-block-title'>연결된 위키</h4>
+                  <div className='wiki-claim-list'>
+                    <article className='wiki-claim-card'>
+                      <div className='wiki-claim-head'>
+                        <strong>{detail.item.sourceNode.label}</strong>
+                        <span className='status-pill published'>{detail.item.sourceNode.kind}</span>
+                      </div>
+                      {detail.item.sourceNode.summary ? (
+                        <p className='wiki-paragraph'>{detail.item.sourceNode.summary}</p>
+                      ) : null}
+                    </article>
+                    <article className='wiki-claim-card'>
+                      <div className='wiki-claim-head'>
+                        <strong>{detail.item.targetNode.label}</strong>
+                        <span className='status-pill published'>{detail.item.targetNode.kind}</span>
+                      </div>
+                      {detail.item.targetNode.summary ? (
+                        <p className='wiki-paragraph'>{detail.item.targetNode.summary}</p>
+                      ) : null}
+                    </article>
+                  </div>
+                </section>
+
+                <section className='wiki-block'>
+                  <h4 className='wiki-block-title'>왜 이렇게 판단했는가</h4>
+                  <p className='wiki-summary'>
+                    {detail.item.surprisingConnection?.explanation ?? detail.item.edge.explanation ?? '이 연결에는 아직 설명이 없습니다.'}
+                  </p>
+                </section>
+
+                <section className='wiki-block'>
+                  <h4 className='wiki-block-title'>추가 질문 팁</h4>
+                  <ul className='wiki-list'>
+                    <li>
+                      좌측 패널에서 <strong>{detail.item.sourceNode.label}</strong> 와 <strong>{detail.item.targetNode.label}</strong> 가 왜 연결되는지 더 자세히 물어볼 수 있습니다.
+                    </li>
+                    <li>
+                      예: <code>{detail.item.sourceNode.label}와 {detail.item.targetNode.label}의 공통 아이디어를 설명해줘</code>
+                    </li>
+                  </ul>
+                </section>
+              </div>
             </>
           ) : null}
 

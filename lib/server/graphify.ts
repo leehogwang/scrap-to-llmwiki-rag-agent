@@ -630,7 +630,18 @@ export function getGraphifyNodeDetail(nodeId: string) {
 export function getGraphContextForPrompt(prompt: string) {
   const payload = getGraphifyPayload()
   if (payload.nodes.length === 0) {
-    return { wikiIds: [] as string[], scrapIds: [] as string[], matchedNodeIds: [] as string[] }
+    return {
+      wikiIds: [] as string[],
+      scrapIds: [] as string[],
+      matchedNodeIds: [] as string[],
+      surprisingConnections: [] as Array<{
+        sourceLabel: string
+        targetLabel: string
+        relation: GraphifyEdgeRelation
+        confidence: number
+        explanation?: string
+      }>
+    }
   }
 
   const promptTokens = extractTokens(prompt)
@@ -661,9 +672,29 @@ export function getGraphContextForPrompt(prompt: string) {
       if (node.kind === 'scrap' && node.refId) scrapIds.add(node.refId)
     })
 
+  const surprisingConnections = payload.surprisingConnections
+    .map((connection) => {
+      const leftTokens = extractTokens(`${connection.sourceLabel}\n${connection.explanation ?? ''}`)
+      const rightTokens = extractTokens(`${connection.targetLabel}\n${connection.explanation ?? ''}`)
+      const score = overlapScore(promptTokens, [...leftTokens, ...rightTokens]) +
+        jaccard(promptTokens, [...leftTokens, ...rightTokens])
+      return { connection, score }
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .map((entry) => ({
+      sourceLabel: entry.connection.sourceLabel,
+      targetLabel: entry.connection.targetLabel,
+      relation: entry.connection.relation,
+      confidence: entry.connection.confidence,
+      explanation: entry.connection.explanation
+    }))
+
   return {
     wikiIds: [...wikiIds].slice(0, 6),
     scrapIds: [...scrapIds].slice(0, 8),
-    matchedNodeIds: [...matchedNodeIds].slice(0, 16)
+    matchedNodeIds: [...matchedNodeIds].slice(0, 16),
+    surprisingConnections
   }
 }

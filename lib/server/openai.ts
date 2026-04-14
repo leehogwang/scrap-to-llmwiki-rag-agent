@@ -877,6 +877,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     `User prompt: ${input.prompt}`,
     `Saved scrap count: ${listScraps(1000).length}`,
     `Graph-matched node ids: ${JSON.stringify(graphContext.matchedNodeIds)}`,
+    `Relevant surprising connections (prefetched): ${JSON.stringify(graphContext.surprisingConnections)}`,
     `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
     `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,
     'Use the prefetched context first. If it is insufficient, call tools to inspect more evidence before answering.'
@@ -896,6 +897,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       JSON.stringify(allScraps),
       'Answer the user in Korean.',
       'Use the saved wiki drafts first, then use scraps to fill gaps.',
+      'If the prompt asks about surprising connections or why two ideas are connected, use the prefetched surprising connection explanations when relevant.',
       'Do not mention internal ids unless the user asks.',
       'If the user is effectively asking to refresh or build wiki pages, tell them to use the "위키 생성/갱신" button instead of pretending that it already happened.'
     ].join('\n\n')

@@ -239,6 +239,13 @@ export interface GraphifyNodeDetail {
   }>
 }
 
+export interface GraphifyEdgeDetail {
+  edge: GraphifyEdge
+  sourceNode: GraphifyNode
+  targetNode: GraphifyNode
+  surprisingConnection?: GraphifySurprisingConnection
+}
+
 export interface ChatRequestBody {
   prompt: string
   selectedScrapIds?: string[]

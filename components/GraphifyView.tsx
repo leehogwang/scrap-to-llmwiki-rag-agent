@@ -7,6 +7,7 @@ import {
   Controls,
   Position,
   ReactFlow,
+  type EdgeMouseHandler,
   type Edge,
   type Node
 } from '@xyflow/react'
@@ -15,6 +16,7 @@ import type { GraphifyNode as GraphNode, GraphifyPayload } from '@/lib/types'
 type GraphifyViewProps = {
   payload: GraphifyPayload | null
   onOpenNode: (node: GraphNode) => void
+  onOpenSurprisingEdge: (edgeId: string) => void
 }
 
 const kindLabel: Record<GraphNode['kind'], string> = {
@@ -549,15 +551,18 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
         animated: false,
         zIndex: 21,
         className: 'graph-edge graph-edge-surprising graph-edge-surprising-core',
+        data: {
+          originalEdgeId: edge.id
+        },
         style: {
           stroke: sameCluster ? 'rgba(176, 46, 46, 0.98)' : 'rgba(198, 56, 56, 0.96)',
           strokeLinecap: 'round',
           strokeLinejoin: 'round',
-          pointerEvents: 'none',
+          cursor: 'pointer',
           opacity: 0.98,
           strokeWidth: Math.max(3.2, Math.min(5.2, 2.6 + surprisingScore * 0.4))
         },
-        interactionWidth: 0
+        interactionWidth: 18
       })
     }
   })
@@ -567,7 +572,7 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
   return { nodes: layoutNodes, edges: layoutEdges, clusters }
 }
 
-export default function GraphifyView({ payload, onOpenNode }: GraphifyViewProps) {
+export default function GraphifyView({ payload, onOpenNode, onOpenSurprisingEdge }: GraphifyViewProps) {
   const [clusterFilter, setClusterFilter] = useState('all')
   const [kindFilter, setKindFilter] = useState<Set<GraphNode['kind']>>(new Set(['scrap', 'wiki', 'claim', 'concept']))
 
@@ -587,6 +592,16 @@ export default function GraphifyView({ payload, onOpenNode }: GraphifyViewProps)
     () => makeLayout(safePayload, clusterFilter, kindFilter),
     [safePayload, clusterFilter, kindFilter]
   )
+
+  const handleEdgeClick = useMemo<EdgeMouseHandler>(() => {
+    return (_, edge) => {
+      const originalEdgeId = typeof edge.data?.originalEdgeId === 'string'
+        ? edge.data.originalEdgeId
+        : null
+      if (!originalEdgeId) return
+      onOpenSurprisingEdge(originalEdgeId)
+    }
+  }, [onOpenSurprisingEdge])
 
   return (
     <div className='graph-shell graph-shell-light'>
@@ -666,6 +681,7 @@ export default function GraphifyView({ payload, onOpenNode }: GraphifyViewProps)
               const target = safePayload.nodes.find((item) => item.id === node.id)
               if (target) onOpenNode(target)
             }}
+            onEdgeClick={handleEdgeClick}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={22} color='rgba(17, 17, 17, 0.04)' />
