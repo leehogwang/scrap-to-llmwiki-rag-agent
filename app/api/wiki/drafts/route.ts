@@ -12,7 +12,7 @@ export async function GET() {
 }
 
 const deleteSchema = z.object({
-  ids: z.array(z.string()).min(1).max(100)
+  ids: z.array(z.string()).min(1).max(1000)
 })
 
 export async function DELETE(request: NextRequest) {

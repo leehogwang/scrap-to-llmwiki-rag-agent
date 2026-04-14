@@ -41,7 +41,7 @@ const payloadSchema = z.object({
     channelUrl: z.string().url().optional(),
     thumbnailUrl: z.string().url().optional(),
     referrerUrl: z.string().url().optional()
-  }).optional(),
+  }).nullish(),
   userNote: z.string().max(10000).optional(),
   tags: z.array(z.string().max(120)).max(50).optional(),
   rect: z.object({
@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
     const screenshot = formData.get('screenshot')
     const scrap = await captureScrapToNotion({
       ...parsed,
+      youtubeMeta: parsed.youtubeMeta ?? undefined,
       screenshot: screenshot instanceof File ? screenshot : null
     })
     return NextResponse.json({ scrap })

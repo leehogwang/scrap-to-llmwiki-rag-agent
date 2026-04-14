@@ -499,17 +499,23 @@
     const youtubeMeta =
       detectYouTubeCaptureFromElement(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) ||
       detectYouTubeCapture(box)
-    const candidateChunks = collectCandidateChunks(box)
-    const imageCandidates = collectImageCandidates(box)
-    const selectedText =
-      selectedTextFromCandidateChunks(candidateChunks) ||
-      collectText(box) ||
-      youtubeMeta?.videoTitle ||
-      ''
-    const imageUrls = [...new Set([
-      ...collectImageUrls(box),
-      ...(youtubeMeta?.thumbnailUrl ? [youtubeMeta.thumbnailUrl] : [])
-    ])]
+    const isThumbnailCardCapture = youtubeMeta?.mode === 'thumbnail_card'
+    const candidateChunks = isThumbnailCardCapture ? [] : collectCandidateChunks(box)
+    const imageCandidates = isThumbnailCardCapture ? [] : collectImageCandidates(box)
+    const selectedText = isThumbnailCardCapture
+      ? (youtubeMeta?.videoTitle || '')
+      : (
+        selectedTextFromCandidateChunks(candidateChunks) ||
+        collectText(box) ||
+        youtubeMeta?.videoTitle ||
+        ''
+      )
+    const imageUrls = isThumbnailCardCapture
+      ? [...new Set([youtubeMeta?.thumbnailUrl].filter(Boolean))]
+      : [...new Set([
+          ...collectImageUrls(box),
+          ...(youtubeMeta?.thumbnailUrl ? [youtubeMeta.thumbnailUrl] : [])
+        ])]
     const shouldUseScreenshot = !selectedText.trim() || hasCanvasLikeContent(box)
 
     let screenshotBlob = null
@@ -528,7 +534,6 @@
       candidateChunks,
       imageUrls,
       imageCandidates,
-      youtubeMeta,
       rect: {
         left: box.left,
         top: box.top,
@@ -538,6 +543,10 @@
         scrollY: window.scrollY,
         devicePixelRatio: window.devicePixelRatio || 1
       }
+    }
+
+    if (youtubeMeta) {
+      payload.youtubeMeta = youtubeMeta
     }
 
     const saveResponse = await sendRuntimeMessage({

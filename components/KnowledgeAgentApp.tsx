@@ -78,8 +78,59 @@ function buildWikiGenerationMessage(payload: WikiGenerationResponse, drafts: Wik
   return '위키 초안을 생성했습니다.'
 }
 
+async function parseJsonResponse<T>(response: Response): Promise<T | null> {
+  const text = await response.text()
+  if (!text.trim()) return null
+  return JSON.parse(text) as T
+}
+
+async function parseNdjsonStream(
+  response: Response,
+  handlers: {
+    onProgress?: (payload: { completed: number; total: number; title?: string }) => void
+    onResult?: (payload: WikiGenerationResponse) => Promise<void> | void
+    onError?: (message: string) => void
+  }
+) {
+  if (!response.body) {
+    throw new Error('응답 본문이 없습니다.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let newlineIndex = buffer.indexOf('\n')
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim()
+      buffer = buffer.slice(newlineIndex + 1)
+      newlineIndex = buffer.indexOf('\n')
+
+      if (!line) continue
+      const entry = JSON.parse(line) as
+        | ({ type: 'progress' } & { completed: number; total: number; title?: string })
+        | { type: 'result'; payload: WikiGenerationResponse }
+        | { type: 'error'; message: string }
+
+      if (entry.type === 'progress') {
+        handlers.onProgress?.({ completed: entry.completed, total: entry.total, title: entry.title })
+      } else if (entry.type === 'result') {
+        await handlers.onResult?.(entry.payload)
+      } else if (entry.type === 'error') {
+        handlers.onError?.(entry.message)
+      }
+    }
+  }
+}
+
 type WorkspaceTab = 'scraps' | 'wiki' | 'graphify'
-const maxSelectedScraps = 100
+const scrapsPerPage = 10
+const wikiPerPage = 10
 type DetailState =
   | { type: 'scrap'; item: Scrap }
   | { type: 'wiki'; item: WikiDraft }
@@ -95,12 +146,15 @@ export default function KnowledgeAgentApp() {
   const [selectedWikiIds, setSelectedWikiIds] = useState<string[]>([])
   const [detail, setDetail] = useState<DetailState>(null)
   const [scrapQuery, setScrapQuery] = useState('')
-  const [wikiTopic, setWikiTopic] = useState('')
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(false)
   const [graphLoading, setGraphLoading] = useState(false)
   const [wikiProgress, setWikiProgress] = useState<{ completed: number; total: number; title?: string } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [currentScrapPage, setCurrentScrapPage] = useState(1)
+  const [currentWikiPage, setCurrentWikiPage] = useState(1)
+  const [autoApproveWiki, setAutoApproveWiki] = useState(false)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -110,6 +164,17 @@ export default function KnowledgeAgentApp() {
   ])
   const chatLogRef = useRef<HTMLDivElement | null>(null)
   const automationBootedRef = useRef(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setAutoApproveWiki(window.localStorage.getItem('clipwiki:auto-approve-wiki') === 'true')
+    setSettingsLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    if (!settingsLoaded || typeof window === 'undefined') return
+    window.localStorage.setItem('clipwiki:auto-approve-wiki', autoApproveWiki ? 'true' : 'false')
+  }, [autoApproveWiki, settingsLoaded])
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter') return
@@ -150,6 +215,14 @@ export default function KnowledgeAgentApp() {
     void refresh('')
   }, [refresh])
 
+  useEffect(() => {
+    setCurrentScrapPage(1)
+  }, [scrapQuery, scraps.length])
+
+  useEffect(() => {
+    setCurrentWikiPage(1)
+  }, [wikiDrafts.length])
+
   const runDailyAutomation = useCallback(async (options: { forceGraph?: boolean; forceWiki?: boolean; appendMessage?: boolean } = {}) => {
     const appendMessage = options.appendMessage ?? true
     if (options.forceGraph) setGraphLoading(true)
@@ -162,23 +235,34 @@ export default function KnowledgeAgentApp() {
           forceWiki: options.forceWiki ?? false
         })
       })
-      const payload = await response.json()
+      const payload = await parseJsonResponse<{
+        error?: string
+        graphPayload?: GraphifyPayload
+        graphRebuilt?: boolean
+        wikiGenerated?: boolean
+        wikiDraftCount?: number
+        drafts?: WikiDraft[]
+      }>(response)
       if (!response.ok) {
-        throw new Error(payload.error ?? '자동 계산에 실패했습니다.')
+        throw new Error(payload?.error ?? '자동 계산에 실패했습니다.')
       }
 
-      if (payload.graphPayload) {
+      if (payload?.graphPayload) {
         setGraphify(payload.graphPayload)
       }
 
-      if (payload.graphRebuilt || payload.wikiGenerated) {
+      if (payload?.graphRebuilt || payload?.wikiGenerated) {
         await refresh(scrapQuery)
+      }
+
+      if (payload?.wikiGenerated && autoApproveWiki && Array.isArray(payload.drafts) && payload.drafts.length > 0) {
+        await bulkApproveDrafts(payload.drafts.map((draft) => draft.id), { openAfter: false, appendMessage: false })
       }
 
       if (appendMessage) {
         const parts = [
-          payload.graphRebuilt ? '그래프를 갱신했습니다.' : '',
-          payload.wikiGenerated ? `위키 초안 ${payload.wikiDraftCount}개를 자동 생성했습니다.` : ''
+          payload?.graphRebuilt ? '그래프를 갱신했습니다.' : '',
+          payload?.wikiGenerated ? `위키 초안 ${payload.wikiDraftCount ?? 0}개를 자동 생성했습니다.` : ''
         ].filter(Boolean)
         if (parts.length > 0) {
           setMessages((current) => [...current, { role: 'system', text: parts.join(' ') }])
@@ -191,13 +275,34 @@ export default function KnowledgeAgentApp() {
     } finally {
       if (options.forceGraph) setGraphLoading(false)
     }
+  }, [autoApproveWiki, bulkApproveDrafts, refresh, scrapQuery])
+
+  const runManualGraphRebuild = useCallback(async () => {
+    setGraphLoading(true)
+    try {
+      const response = await fetch('/api/graphify/rebuild', {
+        method: 'POST'
+      })
+      const payload = await parseJsonResponse<GraphifyPayload & { error?: string }>(response)
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? '그래프 갱신에 실패했습니다.')
+      }
+      setGraphify(payload)
+      await refresh(scrapQuery)
+      setMessages((current) => [...current, { role: 'system', text: '그래프를 갱신했습니다.' }])
+    } catch (error) {
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '그래프 갱신에 실패했습니다.') }])
+    } finally {
+      setGraphLoading(false)
+    }
   }, [refresh, scrapQuery])
 
   useEffect(() => {
+    if (!settingsLoaded) return
     if (automationBootedRef.current) return
     automationBootedRef.current = true
     void runDailyAutomation({ appendMessage: true })
-  }, [runDailyAutomation])
+  }, [runDailyAutomation, settingsLoaded])
 
   async function openScrap(id: string) {
     const response = await fetch(`/api/scraps/${id}`)
@@ -231,7 +336,51 @@ export default function KnowledgeAgentApp() {
     }
   }
 
-  async function handleWikiGenerationResponse(payload: WikiGenerationResponse, options: { appendMessage?: boolean } = {}) {
+  async function bulkApproveDrafts(ids: string[], options: { openAfter?: boolean; appendMessage?: boolean } = {}) {
+    if (ids.length === 0) return null
+
+    const response = await fetch('/api/wiki/drafts/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    })
+    const payload = await parseJsonResponse<{
+      drafts?: WikiDraft[]
+      approved?: number
+      published?: number
+      alreadyPublished?: number
+      errors?: Array<{ id: string; message: string }>
+      error?: string
+    }>(response)
+
+    if (!response.ok || !payload) {
+      throw new Error(payload?.error ?? '위키 일괄 승인에 실패했습니다.')
+    }
+
+    await refresh(scrapQuery)
+    setTab('wiki')
+
+    const firstDraft = payload.drafts?.[0]
+    if (options.openAfter !== false && firstDraft) {
+      await openWikiDraft(firstDraft.id)
+    }
+
+    if (options.appendMessage !== false) {
+      const summary = [
+        payload.published ? `${payload.published}개 게시` : '',
+        payload.alreadyPublished ? `${payload.alreadyPublished}개 이미 게시됨` : '',
+        payload.errors?.length ? `${payload.errors.length}개 실패` : ''
+      ].filter(Boolean).join(' · ')
+      setMessages((current) => [
+        ...current,
+        { role: 'system', text: summary ? `선택한 위키를 일괄 승인했습니다. (${summary})` : '선택한 위키를 일괄 승인했습니다.' }
+      ])
+    }
+
+    return payload
+  }
+
+  const handleWikiGenerationResponse = useCallback(async (payload: WikiGenerationResponse, options: { appendMessage?: boolean } = {}) => {
     const appendMessage = options.appendMessage ?? true
     const drafts = extractGeneratedDrafts(payload)
     if (drafts.length === 0) {
@@ -244,6 +393,11 @@ export default function KnowledgeAgentApp() {
           }
         ])
       }
+      return
+    }
+
+    if (autoApproveWiki) {
+      await bulkApproveDrafts(drafts.map((draft) => draft.id), { openAfter: true, appendMessage })
       return
     }
 
@@ -263,81 +417,55 @@ export default function KnowledgeAgentApp() {
     if (appendMessage) {
       setMessages((current) => [...current, { role: 'system', text: buildWikiGenerationMessage(payload, drafts) }])
     }
-  }
+  }, [autoApproveWiki, bulkApproveDrafts, refresh, scrapQuery])
 
-  const selectedScrapCount = selectedScrapIds.length
-
-  async function handleGenerateWiki() {
-    if (selectedScrapIds.length === 0) return
+  const runManualWikiAutoGenerate = useCallback(async () => {
     setLoading(true)
     setWikiProgress({ completed: 0, total: 0 })
+    setMessages((current) => [...current, { role: 'system', text: '위키 생성/갱신을 시작했습니다.' }])
     try {
-      const response = await fetch('/api/wiki/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic: wikiTopic.trim(),
-          selectedScrapIds
-        })
+      const response = await fetch('/api/wiki/auto-generate', {
+        method: 'POST'
       })
       if (!response.ok) {
-        const payload = await response.json() as { error?: string }
-        throw new Error(payload.error ?? 'Failed to generate wiki draft')
+        const payload = await parseJsonResponse<{ error?: string }>(response)
+        throw new Error(payload?.error ?? '위키 생성/갱신에 실패했습니다.')
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('위키 초안 생성 스트림을 읽을 수 없습니다.')
-      }
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let finalPayload: WikiGenerationResponse | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          const event = JSON.parse(trimmed) as
-            | { type: 'progress'; completed: number; total: number; title?: string }
-            | { type: 'result'; payload: WikiGenerationResponse }
-            | { type: 'error'; message: string }
-
-          if (event.type === 'progress') {
-            setWikiProgress({
-              completed: event.completed,
-              total: event.total,
-              title: event.title
-            })
-            continue
+      let handledResult = false
+      await parseNdjsonStream(response, {
+        onProgress: (progress) => {
+          setWikiProgress(progress)
+        },
+        onResult: async (payload) => {
+          handledResult = true
+          if (Array.isArray(payload.drafts) && payload.drafts.length > 0) {
+            await handleWikiGenerationResponse(payload, { appendMessage: true })
+          } else {
+            await refresh(scrapQuery)
+            setMessages((current) => [
+              ...current,
+              { role: 'system', text: payload.message?.trim() || '새로 정리할 스크랩이 없어 위키 초안을 만들지 않았습니다.' }
+            ])
           }
-
-          if (event.type === 'error') {
-            throw new Error(event.message)
-          }
-
-          finalPayload = event.payload
+        },
+        onError: (message) => {
+          throw new Error(message)
         }
-      }
+      })
 
-      if (!finalPayload) {
-        throw new Error('위키 초안 생성 결과를 받지 못했습니다.')
+      if (!handledResult) {
+        throw new Error('위키 생성/갱신 결과를 받지 못했습니다.')
       }
-
-      await handleWikiGenerationResponse(finalPayload)
     } catch (error) {
-      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '위키 초안 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.') }])
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '위키 생성/갱신에 실패했습니다.') }])
     } finally {
       setWikiProgress(null)
       setLoading(false)
     }
-  }
+  }, [handleWikiGenerationResponse, refresh, scrapQuery])
+
+  const selectedScrapCount = selectedScrapIds.length
 
   function clearSelection() {
     setSelectedScrapIds([])
@@ -345,23 +473,6 @@ export default function KnowledgeAgentApp() {
 
   function clearWikiSelection() {
     setSelectedWikiIds([])
-  }
-
-  function toggleSelectAllVisible() {
-    if (scrapCards.length === 0) return
-    const visibleIds = scrapCards.map((scrap) => scrap.id)
-    const allSelected = visibleIds.every((id) => selectedScrapIds.includes(id))
-    setSelectedScrapIds((current) => {
-      if (allSelected) return current.filter((id) => !visibleIds.includes(id))
-      const next = [...new Set([...current, ...visibleIds])]
-      if (next.length > maxSelectedScraps) {
-        setMessages((messages) => [
-          ...messages,
-          { role: 'system', text: `한 번에 최대 ${maxSelectedScraps}개의 스크랩만 선택할 수 있습니다.` }
-        ])
-      }
-      return next.slice(0, maxSelectedScraps)
-    })
   }
 
   async function deleteSelectedScraps() {
@@ -412,6 +523,22 @@ export default function KnowledgeAgentApp() {
     }
   }
 
+  async function approveSelectedWikis() {
+    if (selectedWikiIds.length === 0) return
+    setLoading(true)
+    try {
+      await bulkApproveDrafts(selectedWikiIds, { openAfter: false, appendMessage: true })
+      if (detail?.type === 'wiki' && selectedWikiIds.includes(detail.item.id)) {
+        await openWikiDraft(detail.item.id)
+      }
+      setSelectedWikiIds([])
+    } catch (error) {
+      setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '위키 일괄 승인에 실패했습니다.') }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleChat() {
     if (!prompt.trim()) return
     const nextPrompt = prompt
@@ -423,8 +550,7 @@ export default function KnowledgeAgentApp() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: nextPrompt,
-          selectedScrapIds
+          prompt: nextPrompt
         } satisfies ChatRequestBody)
       })
       const payload = await response.json()
@@ -514,8 +640,18 @@ export default function KnowledgeAgentApp() {
   }
 
   const scrapCards = useMemo(() => scraps, [scraps])
-  const allVisibleSelected = scrapCards.length > 0 && scrapCards.every((scrap) => selectedScrapIds.includes(scrap.id))
-  const allVisibleWikiSelected = wikiDrafts.length > 0 && wikiDrafts.every((draft) => selectedWikiIds.includes(draft.id))
+  const totalScrapPages = Math.max(1, Math.ceil(scrapCards.length / scrapsPerPage))
+  const safeScrapPage = Math.min(currentScrapPage, totalScrapPages)
+  const paginatedScrapCards = useMemo(() => {
+    const startIndex = (safeScrapPage - 1) * scrapsPerPage
+    return scrapCards.slice(startIndex, startIndex + scrapsPerPage)
+  }, [safeScrapPage, scrapCards])
+  const totalWikiPages = Math.max(1, Math.ceil(wikiDrafts.length / wikiPerPage))
+  const safeWikiPage = Math.min(currentWikiPage, totalWikiPages)
+  const paginatedWikiDrafts = useMemo(() => {
+    const startIndex = (safeWikiPage - 1) * wikiPerPage
+    return wikiDrafts.slice(startIndex, startIndex + wikiPerPage)
+  }, [safeWikiPage, wikiDrafts])
 
   return (
     <main className='shell'>
@@ -530,11 +666,7 @@ export default function KnowledgeAgentApp() {
 
         <section className='section stack ask-section'>
           <h2 className='title'>Ask over scraps</h2>
-          <p className='muted small'>
-            {selectedScrapCount > 0
-              ? `${selectedScrapCount}개의 스크랩이 선택되어 있습니다. 선택한 자료만 기준으로 답변하거나 위키 초안을 만들 수 있습니다.`
-              : '질문 전에 스크랩을 선택하면 범위를 좁힐 수 있습니다.'}
-          </p>
+          <p className='muted small'>저장된 모든 스크랩과 위키를 함께 참고해서 답합니다.</p>
           <div className='chat-log' ref={chatLogRef}>
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={clsx('bubble', message.role)}>
@@ -547,14 +679,11 @@ export default function KnowledgeAgentApp() {
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={handlePromptKeyDown}
-            placeholder='예: 선택한 스크랩들에서 공통 개념과 약한 주장만 정리해줘.'
+            placeholder='예: 저장된 위키와 스크랩을 바탕으로 MAD 프레임워크가 무엇인지 설명해줘.'
           />
           <div className='button-row'>
             <button className='action-button primary strong' onClick={handleChat} disabled={loading} type='button'>
               Run Chat
-            </button>
-            <button className='action-button' onClick={clearSelection} disabled={selectedScrapCount === 0} type='button'>
-              Clear Selection
             </button>
           </div>
         </section>
@@ -592,11 +721,11 @@ export default function KnowledgeAgentApp() {
               </div>
             ) : null}
             <div className='toolbar-stats'>
-              <button className='action-button' onClick={() => void runDailyAutomation({ forceGraph: true, appendMessage: true })} disabled={graphLoading || loading} type='button'>
-                {graphLoading ? '그래프 계산 중...' : '그래프 계산'}
+              <button className='action-button' onClick={() => void runManualGraphRebuild()} disabled={graphLoading || loading} type='button'>
+                {graphLoading ? '그래프 갱신 중...' : '그래프 갱신'}
               </button>
-              <button className='action-button' onClick={() => void runDailyAutomation({ forceWiki: true, appendMessage: true })} disabled={loading} type='button'>
-                위키 정리
+              <button className='action-button' onClick={() => void runManualWikiAutoGenerate()} disabled={loading || graphLoading} type='button'>
+                위키 생성/갱신
               </button>
               <span className='muted small'>Captured scraps: {scraps.length}</span>
               <span className='muted small'>Wiki drafts: {wikiDrafts.length}</span>
@@ -620,21 +749,6 @@ export default function KnowledgeAgentApp() {
                   </button>
                 </div>
               </div>
-
-              <div className='toolbar-block'>
-                <label className='muted small toolbar-label'>Create wiki draft</label>
-                <div className='toolbar-inline'>
-                  <input
-                    className='input'
-                    value={wikiTopic}
-                    onChange={(event) => setWikiTopic(event.target.value)}
-                    placeholder='주제를 비워두면 자동으로 제목과 구조를 만듭니다'
-                  />
-                  <button className='action-button primary strong' onClick={handleGenerateWiki} disabled={loading || selectedScrapCount === 0} type='button'>
-                    Generate Wiki
-                  </button>
-                </div>
-              </div>
             </div>
           ) : null}
 
@@ -650,49 +764,71 @@ export default function KnowledgeAgentApp() {
               </span>
               {tab === 'scraps' ? (
                 <span className='muted small'>
-                  {allVisibleSelected ? '현재 보이는 스크랩이 모두 선택됨' : `선택한 스크랩으로 채팅/위키 생성 가능 · 최대 ${maxSelectedScraps}개`}
+                  선택한 스크랩은 삭제에만 사용됩니다.
                 </span>
               ) : tab === 'wiki' ? (
                 <span className='muted small'>
-                  {allVisibleWikiSelected ? '현재 보이는 위키 초안이 모두 선택됨' : '선택한 위키 초안을 삭제할 수 있습니다.'}
+                  선택한 위키 초안을 일괄 승인하거나 삭제할 수 있습니다.
                 </span>
               ) : null}
             </div>
             {tab === 'scraps' ? (
               <div className='button-row'>
-                <button className='action-button' onClick={toggleSelectAllVisible} disabled={scrapCards.length === 0} type='button'>
-                  {allVisibleSelected ? 'Deselect Visible' : 'Select Visible'}
-                </button>
-                <button className='action-button' onClick={clearSelection} disabled={selectedScrapCount === 0} type='button'>
-                  Clear Selected
+                <button
+                  className='action-button'
+                  onClick={() =>
+                    setSelectedScrapIds((current) =>
+                      current.length === scrapCards.length && scrapCards.length > 0
+                        ? []
+                        : scrapCards.map((scrap) => scrap.id)
+                    )
+                  }
+                  disabled={scrapCards.length === 0}
+                  type='button'
+                >
+                  {selectedScrapCount === scrapCards.length && scrapCards.length > 0 ? 'Clear All' : 'Select All'}
                 </button>
                 <button className='action-button danger' onClick={deleteSelectedScraps} disabled={selectedScrapCount === 0 || loading} type='button'>
-                  Delete Selected
+                  <span aria-hidden='true'>🗑</span>
+                  <span className='sr-only'>Delete Selected</span>
                 </button>
               </div>
             ) : tab === 'wiki' ? (
               <div className='button-row'>
+                <label className='toggle-chip' htmlFor='auto-approve-wiki'>
+                  <input
+                    id='auto-approve-wiki'
+                    checked={autoApproveWiki}
+                    onChange={(event) => setAutoApproveWiki(event.target.checked)}
+                    type='checkbox'
+                  />
+                  <span>Auto approve</span>
+                </label>
                 <button
                   className='action-button'
-                  onClick={() => {
-                    const visibleIds = wikiDrafts.map((draft) => draft.id)
-                    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedWikiIds.includes(id))
+                  onClick={() =>
                     setSelectedWikiIds((current) =>
-                      allSelected
-                        ? current.filter((id) => !visibleIds.includes(id))
-                        : [...new Set([...current, ...visibleIds])].slice(0, 100)
+                      current.length === wikiDrafts.length && wikiDrafts.length > 0
+                        ? []
+                        : wikiDrafts.map((draft) => draft.id)
                     )
-                  }}
+                  }
                   disabled={wikiDrafts.length === 0}
                   type='button'
                 >
-                  {allVisibleWikiSelected ? 'Deselect Visible' : 'Select Visible'}
+                  {selectedWikiIds.length === wikiDrafts.length && wikiDrafts.length > 0 ? 'Clear All' : 'Select All'}
                 </button>
-                <button className='action-button' onClick={clearWikiSelection} disabled={selectedWikiIds.length === 0} type='button'>
-                  Clear Selected
+                <button
+                  className='action-button success'
+                  onClick={approveSelectedWikis}
+                  disabled={selectedWikiIds.length === 0 || loading}
+                  type='button'
+                >
+                  Approve Selected
                 </button>
                 <button className='action-button danger' onClick={deleteSelectedWikis} disabled={selectedWikiIds.length === 0 || loading} type='button'>
-                  Delete Selected
+                  <span aria-hidden='true'>🗑</span>
+                  <span className='sr-only'>Delete Selected</span>
                 </button>
               </div>
             ) : null}
@@ -703,7 +839,7 @@ export default function KnowledgeAgentApp() {
         <div className='list'>
           {tab === 'scraps' ? (
             <div className='cards'>
-              {scrapCards.map((scrap) => {
+              {paginatedScrapCards.map((scrap) => {
                 const selected = selectedScrapIds.includes(scrap.id)
                 return (
                   <div key={scrap.id} className={clsx('card', selected && 'card-selected')}>
@@ -730,9 +866,7 @@ export default function KnowledgeAgentApp() {
                           setSelectedScrapIds((current) =>
                             selected
                               ? current.filter((id) => id !== scrap.id)
-                              : current.length >= maxSelectedScraps
-                                ? current
-                                : [...current, scrap.id]
+                              : [...current, scrap.id]
                           )
                         }
                         type='button'
@@ -751,12 +885,42 @@ export default function KnowledgeAgentApp() {
                   아직 저장된 스크랩이 없습니다. 크롬 익스텐션에서 <span className='inline-code'>Alt + Drag</span>로 영역을 선택해 저장하세요.
                 </div>
               ) : null}
+              {scrapCards.length > scrapsPerPage ? (
+                <div className='pagination'>
+                  <button
+                    className='pagination-button nav'
+                    disabled={safeScrapPage === 1}
+                    onClick={() => setCurrentScrapPage((current) => Math.max(1, current - 1))}
+                    type='button'
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: totalScrapPages }, (_, index) => index + 1).map((page) => (
+                    <button
+                      key={page}
+                      className={clsx('pagination-button', page === safeScrapPage && 'active')}
+                      onClick={() => setCurrentScrapPage(page)}
+                      type='button'
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className='pagination-button nav'
+                    disabled={safeScrapPage === totalScrapPages}
+                    onClick={() => setCurrentScrapPage((current) => Math.min(totalScrapPages, current + 1))}
+                    type='button'
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
           {tab === 'wiki' ? (
             <div className='cards'>
-              {wikiDrafts.map((draft) => {
+              {paginatedWikiDrafts.map((draft) => {
                 const selected = selectedWikiIds.includes(draft.id)
                 return (
                   <div
@@ -794,7 +958,7 @@ export default function KnowledgeAgentApp() {
                           setSelectedWikiIds((current) =>
                             selected
                               ? current.filter((id) => id !== draft.id)
-                              : [...new Set([...current, draft.id])].slice(0, 100)
+                              : [...new Set([...current, draft.id])]
                           )
                         }
                         type='button'
@@ -810,6 +974,36 @@ export default function KnowledgeAgentApp() {
               })}
               {wikiDrafts.length === 0 ? (
                 <div className='empty'>아직 위키 초안이 없습니다. 스크랩을 선택한 뒤 Generate Wiki를 눌러 초안을 만드세요.</div>
+              ) : null}
+              {wikiDrafts.length > wikiPerPage ? (
+                <div className='pagination'>
+                  <button
+                    className='pagination-button nav'
+                    disabled={safeWikiPage === 1}
+                    onClick={() => setCurrentWikiPage((current) => Math.max(1, current - 1))}
+                    type='button'
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: totalWikiPages }, (_, index) => index + 1).map((page) => (
+                    <button
+                      key={page}
+                      className={clsx('pagination-button', page === safeWikiPage && 'active')}
+                      onClick={() => setCurrentWikiPage(page)}
+                      type='button'
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className='pagination-button nav'
+                    disabled={safeWikiPage === totalWikiPages}
+                    onClick={() => setCurrentWikiPage((current) => Math.min(totalWikiPages, current + 1))}
+                    type='button'
+                  >
+                    Next
+                  </button>
+                </div>
               ) : null}
             </div>
           ) : null}

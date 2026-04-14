@@ -68,6 +68,7 @@ export async function POST(request: NextRequest) {
     let graphRebuilt = false
     let wikiGenerated = false
     let wikiDraftCount = 0
+    let drafts = [] as Awaited<ReturnType<typeof createWikiDraftsFromSelection>>
     let graphPayload: Awaited<ReturnType<typeof rebuildGraphifyPayload>> | null = null
 
     const latestScrapAt = latestCapturedAtIso()
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest) {
     if (shouldRunWiki) {
       const freshScraps = getFreshUnassignedScraps()
       if (freshScraps.length > 0) {
-        const drafts = await createWikiDraftsFromSelection('', freshScraps, 'general')
+        drafts = await createWikiDraftsFromSelection('', freshScraps, 'general')
         wikiGenerated = drafts.length > 0
         wikiDraftCount = drafts.length
       }
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
       graphRebuilt,
       wikiGenerated,
       wikiDraftCount,
+      drafts,
       graphPayload,
       today
     })

@@ -472,59 +472,97 @@ function makeLayout(payload: GraphifyPayload, clusterFilter: string, kindFilter:
     }
   })
 
-  const sortedEdges = [...edges].sort((left, right) => Number(left.surprising) - Number(right.surprising))
+  const normalLayoutEdges: Edge[] = []
+  const surprisingLayoutEdges: Edge[] = []
+  let surprisingOrdinal = 0
 
-  const layoutEdges: Edge[] = sortedEdges.map((edge) => ({
-    ...(function () {
-      const sourceNode = allowedNodes.find((node) => node.id === edge.source)
-      const targetNode = allowedNodes.find((node) => node.id === edge.target)
-      const sameCluster = sourceNode?.clusterId && sourceNode.clusterId === targetNode?.clusterId
-      const surprising = Boolean(edge.surprising)
-      const stroke = sameCluster
-        ? surprising
-          ? 'rgba(191, 58, 58, 0.94)'
-          : edge.provenance === 'INFERRED'
-            ? 'rgba(136, 145, 154, 0.32)'
-            : 'rgba(108, 117, 126, 0.24)'
-        : surprising
-          ? 'rgba(191, 58, 58, 0.86)'
-          : edge.provenance === 'INFERRED'
-            ? 'rgba(92, 100, 107, 0.22)'
-            : 'rgba(76, 82, 88, 0.14)'
-      return {
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    type: 'default',
-    animated: false,
-    zIndex: surprising ? 10 : 1,
-    style: {
-      stroke,
-      strokeLinecap: 'round',
-      strokeLinejoin: 'round',
-      pointerEvents: 'none',
-      strokeDasharray: surprising
-        ? '1 0'
-        : edge.provenance === 'INFERRED'
-          ? '3 7'
+  edges.forEach((edge) => {
+    const sourceNode = allowedNodes.find((node) => node.id === edge.source)
+    const targetNode = allowedNodes.find((node) => node.id === edge.target)
+    const sameCluster = sourceNode?.clusterId && sourceNode.clusterId === targetNode?.clusterId
+    const surprising = Boolean(edge.surprising)
+
+    const baseStroke = sameCluster
+      ? edge.provenance === 'INFERRED'
+        ? 'rgba(126, 136, 146, 0.18)'
+        : 'rgba(104, 112, 120, 0.14)'
+      : edge.provenance === 'INFERRED'
+        ? 'rgba(90, 98, 104, 0.12)'
+        : 'rgba(76, 82, 88, 0.08)'
+
+    const baseEdge: Edge = {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'default',
+      animated: false,
+      zIndex: surprising ? 1 : 0,
+      className: 'graph-edge graph-edge-muted',
+      style: {
+        stroke: baseStroke,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        pointerEvents: 'none',
+        strokeDasharray: edge.provenance === 'INFERRED'
+          ? '3 8'
           : edge.provenance === 'AMBIGUOUS'
-            ? '1 8'
+            ? '1 10'
             : undefined,
-      opacity: surprising
-        ? 0.95
-        : edge.provenance === 'AMBIGUOUS'
-          ? 0.16
+        opacity: edge.provenance === 'AMBIGUOUS'
+          ? 0.08
           : edge.provenance === 'INFERRED'
-            ? 0.58
-            : 0.74,
-      strokeWidth: surprising
-        ? Math.max(2.2, Math.min(3.5, 1.55 + (edge.surprisingScore ?? edge.weight) * 0.32))
-        : Math.max(0.95, Math.min(2.1, 0.8 + edge.weight * 0.24))
-    },
-    interactionWidth: 0
-      }
-    })()
-  }))
+            ? 0.18
+            : 0.24,
+        strokeWidth: Math.max(0.7, Math.min(1.3, 0.64 + edge.weight * 0.12))
+      },
+      interactionWidth: 0
+    }
+
+    normalLayoutEdges.push(baseEdge)
+
+    if (surprising) {
+      surprisingOrdinal += 1
+      const surprisingScore = edge.surprisingScore ?? edge.weight
+      surprisingLayoutEdges.push({
+        id: `${edge.id}__surprising_glow`,
+        source: edge.source,
+        target: edge.target,
+        type: 'default',
+        animated: false,
+        zIndex: 20,
+        className: 'graph-edge graph-edge-surprising graph-edge-surprising-glow',
+        style: {
+          stroke: 'rgba(220, 96, 96, 0.24)',
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          pointerEvents: 'none',
+          opacity: 0.92,
+          strokeWidth: Math.max(8.4, Math.min(11.6, 7.2 + surprisingScore * 0.62))
+        },
+        interactionWidth: 0
+      })
+      surprisingLayoutEdges.push({
+        id: `${edge.id}__surprising_core`,
+        source: edge.source,
+        target: edge.target,
+        type: 'default',
+        animated: false,
+        zIndex: 21,
+        className: 'graph-edge graph-edge-surprising graph-edge-surprising-core',
+        style: {
+          stroke: sameCluster ? 'rgba(176, 46, 46, 0.98)' : 'rgba(198, 56, 56, 0.96)',
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          pointerEvents: 'none',
+          opacity: 0.98,
+          strokeWidth: Math.max(3.2, Math.min(5.2, 2.6 + surprisingScore * 0.4))
+        },
+        interactionWidth: 0
+      })
+    }
+  })
+
+  const layoutEdges: Edge[] = [...normalLayoutEdges, ...surprisingLayoutEdges]
 
   return { nodes: layoutNodes, edges: layoutEdges, clusters }
 }
@@ -615,7 +653,7 @@ export default function GraphifyView({ payload, onOpenNode }: GraphifyViewProps)
 
       {safePayload.nodes.length === 0 ? (
         <div className='empty graph-empty'>
-          그래프 캐시가 없습니다. 상단의 그래프 계산 버튼으로 한 번 생성해 주세요.
+          그래프 캐시가 없습니다. 상단의 그래프 갱신 버튼으로 한 번 생성해 주세요.
         </div>
       ) : (
         <div className='graph-canvas graph-canvas-light'>

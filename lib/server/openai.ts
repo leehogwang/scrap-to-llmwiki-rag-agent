@@ -16,13 +16,13 @@ import {
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
 import { getCodexAuth } from '@/lib/server/codex-auth'
+import { runCodexJson } from '@/lib/server/codex-client'
 import { getGraphContextForPrompt } from '@/lib/server/graphify'
 import { publishWikiDraftToNotion } from '@/lib/server/notion'
 import type { ChatRequestBody, Scrap, WikiDraft } from '@/lib/types'
 
 const moderationModel = getOptionalEnv('OPENAI_MODERATION_MODEL', 'omni-moderation-latest')
 const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
-const maxSelectedScraps = 100
 const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
 
@@ -59,7 +59,7 @@ const searchScrapsArgs = z.object({
 })
 
 const getScrapBundleArgs = z.object({
-  scrapIds: z.array(z.string()).min(1).max(maxSelectedScraps)
+  scrapIds: z.array(z.string()).min(1)
 })
 
 const searchWikiDraftsArgs = z.object({
@@ -73,7 +73,7 @@ const getWikiBundleArgs = z.object({
 
 const createWikiDraftArgs = z.object({
   topic: z.string().max(500).optional().default(''),
-  scrapIds: z.array(z.string()).min(1).max(maxSelectedScraps),
+  scrapIds: z.array(z.string()).min(1),
   mode: z.enum(['general', 'claim_compare', 'study_notes', 'decision_log', 'onboarding_map']).default('general')
 })
 
@@ -186,16 +186,11 @@ async function translateDraftPayloadToKorean(rawDraft: Record<string, unknown>) 
   let translated: string | null | undefined
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API ---
-    const response = await (aiClient as any).responses.create({
-      model: defaultModel,
-      temperature: 0,
+    const response = await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: [{ role: 'user', content: JSON.stringify(rawDraft) }],
-      text: { format: { type: 'json_object' } },
-      store: false
+      input: JSON.stringify(rawDraft)
     })
-    translated = response.output_text
+    return response
   } else {
     // --- 기존: Chat Completions API ---
     const response = await aiClient.chat.completions.create({
@@ -475,6 +470,12 @@ async function createOrMergeWikiDraftFromScraps(topic: string, scraps: Scrap[], 
     mergeCandidate
       ? '기존 위키의 좋은 구조와 핵심 개념은 유지하면서, 새 스크랩의 정보로 내용을 확장하거나 수정한 한국어 업데이트 초안을 만드세요.'
       : '선택된 스크랩만 근거로 한국어 위키 초안을 만드세요.',
+    mergeCandidate
+      ? '새 스크랩 때문에 문서의 중심 주제나 범위가 넓어졌다면, 기존 제목과 topic을 고집하지 말고 더 적절한 한국어 제목과 topic으로 과감하게 갱신하세요.'
+      : '제목과 topic은 현재 스크랩 묶음의 실제 중심 주제를 가장 잘 드러내도록 정하세요.',
+    mergeCandidate
+      ? '업데이트는 단순히 문단을 덧붙이는 방식이 아니라, 기존 내용을 재조직하면서 더 적절한 제목, topic, 요약, 핵심 개념으로 다시 정리하는 방식이어야 합니다.'
+      : '결과 문서는 가장 응집도 높은 주제를 중심으로 구조화된 한국어 위키 초안이어야 합니다.',
     '출력은 반드시 strict JSON으로만 반환하세요. 필드: title, topic, mode, summary, keyConcepts, claims, openQuestions, sections.',
     'title, topic, summary, keyConcepts, openQuestions, sections.heading, sections.paragraphs, sections.bullets는 모두 한국어로 작성하세요.',
     'claims.claim과 claims.evidence도 한국어 설명으로 작성하되, 원문 고유명사나 용어는 필요하면 그대로 유지해도 됩니다.',
@@ -502,16 +503,10 @@ async function createOrMergeWikiDraftFromScraps(topic: string, scraps: Scrap[], 
   let raw: string | undefined
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API ---
-    const response = await (aiClient as any).responses.create({
-      model: defaultModel,
-      temperature: 0.2,
+    raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: [{ role: 'user', content: prompt }],
-      text: { format: { type: 'json_object' } },
-      store: false
-    })
-    raw = response.output_text
+      input: prompt
+    }))
   } else {
     // --- 기존: Chat Completions API ---
     const response = await aiClient.chat.completions.create({
@@ -677,7 +672,7 @@ async function clusterScrapsForDrafts(scraps: Scrap[]) {
     'Use multiple groups whenever the scraps cover different topics.',
     'Only return one group when the scraps clearly belong to the same study topic.',
     'Every scrap id must appear in exactly one group.',
-    'Prefer 1 to 6 groups.',
+    'Use as many groups as needed for distinct topics. Prefer separating different topics over forcing them into one group.',
     'Return strict JSON: { "groups": [{ "title": string, "topic": string, "scrapIds": string[], "mode": string }] }.'
   ].join(' ')
 
@@ -686,16 +681,10 @@ async function clusterScrapsForDrafts(scraps: Scrap[]) {
   let raw: string | undefined
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API ---
-    const response = await (aiClient as any).responses.create({
-      model: defaultModel,
-      temperature: 0.1,
+    raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: [{ role: 'user', content: userInput }],
-      text: { format: { type: 'json_object' } },
-      store: false
-    })
-    raw = response.output_text
+      input: userInput
+    }))
   } else {
     // --- 기존: Chat Completions API ---
     const response = await aiClient.chat.completions.create({
@@ -750,7 +739,7 @@ async function clusterScrapsForDrafts(scraps: Scrap[]) {
     return heuristicClusterScraps(scraps)
   }
 
-  return groups.slice(0, 6)
+  return groups
 }
 
 export type WikiDraftProgress = {
@@ -845,16 +834,6 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     }
   }
 
-  const selectedScraps = input.selectedScrapIds
-    .map((id) => getScrap(id))
-    .filter((scrap): scrap is Scrap => Boolean(scrap))
-    .map((scrap) => ({
-      id: scrap.id,
-      title: scrap.title,
-      sourceUrl: scrap.sourceUrl,
-      sourceHost: scrap.sourceHost
-    }))
-
   const retrievalQueries = extractSearchQueries(input.prompt)
   const graphContext = getGraphContextForPrompt(input.prompt)
   const prefetchedWikiDrafts = rankByQueryHits(
@@ -883,15 +862,13 @@ export async function runClipWikiChat(input: ChatRequestBody) {
         .map((id) => getScrap(id))
         .filter((scrap): scrap is Scrap => Boolean(scrap))
     )
-    .filter((scrap) => !input.selectedScrapIds.includes(scrap.id))
     .filter((scrap, index, list) => list.findIndex((candidate) => candidate.id === scrap.id) === index)
     .slice(0, 8)
     .map(trimScrap)
 
   const userMessageContent = [
     `User prompt: ${input.prompt}`,
-    `Selected scraps: ${JSON.stringify(selectedScraps)}`,
-    `Saved scrap count: ${listScraps(12).length}`,
+    `Saved scrap count: ${listScraps(1000).length}`,
     `Graph-matched node ids: ${JSON.stringify(graphContext.matchedNodeIds)}`,
     `Likely relevant wiki drafts (prefetched): ${JSON.stringify(prefetchedWikiDrafts)}`,
     `Likely relevant scraps (prefetched): ${JSON.stringify(prefetchedScraps)}`,

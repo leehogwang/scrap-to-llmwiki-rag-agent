@@ -240,7 +240,7 @@ export interface GraphifyNodeDetail {
 
 export interface ChatRequestBody {
   prompt: string
-  selectedScrapIds: string[]
+  selectedScrapIds?: string[]
 }
 
 export interface ExtensionCapturePayload {

@@ -6,7 +6,7 @@ import { z } from 'zod'
 export const runtime = 'nodejs'
 
 const deleteSchema = z.object({
-  ids: z.array(z.string()).min(1).max(500)
+  ids: z.array(z.string()).min(1).max(1000)
 })
 
 export async function GET(request: NextRequest) {

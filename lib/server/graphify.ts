@@ -7,6 +7,7 @@ import {
 } from '@/lib/server/db'
 import { getOptionalEnv, getRequiredEnv } from '@/lib/server/env'
 import { getCodexAuth } from '@/lib/server/codex-auth'
+import { runCodexJson } from '@/lib/server/codex-client'
 import type {
   GraphifyCluster,
   GraphifyEdge,
@@ -278,16 +279,10 @@ async function inferSurprisingConnections(
   let raw: string | undefined
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API ---
-    const response = await (client as any).responses.create({
-      model: defaultModel,
-      temperature: 0,
+    raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: [{ role: 'user', content: JSON.stringify({ wikis: wikiRecords }) }],
-      text: { format: { type: 'json_object' } },
-      store: false
-    })
-    raw = response.output_text
+      input: JSON.stringify({ wikis: wikiRecords })
+    }))
   } else {
     // --- 기존: Chat Completions API ---
     const response = await client.chat.completions.create({
@@ -424,16 +419,10 @@ async function inferSemanticEdges(nodes: GraphifyNode[], edges: GraphifyEdge[]) 
   let raw: string | undefined
 
   if (useCodexAuth) {
-    // --- Codex Auth: Responses API ---
-    const response = await (client as any).responses.create({
-      model: defaultModel,
-      temperature: 0,
+    raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: [{ role: 'user', content: JSON.stringify({ candidates }) }],
-      text: { format: { type: 'json_object' } },
-      store: false
-    })
-    raw = response.output_text
+      input: JSON.stringify({ candidates })
+    }))
   } else {
     // --- 기존: Chat Completions API ---
     const response = await client.chat.completions.create({
