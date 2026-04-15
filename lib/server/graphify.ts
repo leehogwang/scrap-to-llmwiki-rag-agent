@@ -30,6 +30,8 @@ const cachePath = path.join(dataDir, 'graphify-cache.json')
 const webCachePath = path.join(dataDir, 'graphify-web-cache.json')
 const paperSearchCachePath = path.join(dataDir, 'graphify-paper-search-cache.json')
 const paperContentCachePath = path.join(dataDir, 'graphify-paper-content-cache.json')
+const paperQueryCachePath = path.join(dataDir, 'graphify-paper-query-cache.json')
+const paperRankCachePath = path.join(dataDir, 'graphify-paper-rank-cache.json')
 const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
 const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
@@ -133,6 +135,16 @@ type PaperExtractedContent = {
   paragraphs: string[]
 }
 
+type PaperQueryCacheEntry = {
+  queries: string[]
+  fetchedAt: string
+}
+
+type PaperRankCacheEntry = {
+  rankedIds: string[]
+  fetchedAt: string
+}
+
 function readJsonCache<T>(filePath: string) {
   if (!fs.existsSync(filePath)) return {} as Record<string, T>
   return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, T>
@@ -191,6 +203,114 @@ function buildWikiPaperQuery(record: {
   return Array.from(new Set(terms)).join(' ')
 }
 
+function extractEnglishTokens(text: string) {
+  return Array.from(new Set((normalizeWhitespace(text).toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? [])))
+}
+
+function buildArxivPaperQuery(record: {
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}) {
+  const terms = Array.from(new Set([
+    ...record.keyConcepts.flatMap((term) => extractEnglishTokens(term)),
+    ...extractEnglishTokens(record.title),
+    ...extractEnglishTokens(record.topic),
+    ...extractEnglishTokens(record.summary)
+  ])).slice(0, 6)
+  return terms.join(' ')
+}
+
+function paperQueryCacheKey(record: {
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}) {
+  return `v1:${normalizeText(`${record.title}\n${record.topic}\n${record.summary}\n${record.keyConcepts.join(' ')}`)}`
+}
+
+async function generatePaperSearchQueries(record: {
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}) {
+  const cache = readJsonCache<PaperQueryCacheEntry>(paperQueryCachePath)
+  const cacheKey = paperQueryCacheKey(record)
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
+    return cached.queries
+  }
+
+  const fallback = Array.from(new Set([
+    buildArxivPaperQuery(record),
+    extractEnglishTokens(record.keyConcepts.join(' ')).slice(0, 4).join(' '),
+    extractEnglishTokens(`${record.title} ${record.topic}`).slice(0, 4).join(' ')
+  ].map((query) => normalizeWhitespace(query)).filter(Boolean))).slice(0, 3)
+
+  const systemPrompt = [
+    'Generate concise English arXiv search queries for a Korean wiki topic.',
+    'Expand abbreviations when useful, keep only the 2 to 4 most important technical concepts, and avoid long sentences.',
+    'Return 1 to 3 query strings that are likely to retrieve relevant research papers.',
+    'Queries must be in English and optimized for paper search, not for general web search.',
+    'Return JSON only: {"queries":[string]}'
+  ].join(' ')
+
+  try {
+    let raw: string | undefined
+    if (useCodexAuth) {
+      raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
+        instructions: systemPrompt,
+        input: JSON.stringify({
+          title: record.title,
+          topic: record.topic,
+          summary: record.summary,
+          keyConcepts: record.keyConcepts.slice(0, 8)
+        })
+      }))
+    } else {
+      const response = await client.chat.completions.create({
+        model: defaultModel,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              title: record.title,
+              topic: record.topic,
+              summary: record.summary,
+              keyConcepts: record.keyConcepts.slice(0, 8)
+            })
+          }
+        ]
+      })
+      raw = response.choices[0]?.message?.content ?? undefined
+    }
+    const parsed = raw ? JSON.parse(raw) as { queries?: string[] } : {}
+    const queries = Array.from(new Set((parsed.queries ?? [])
+      .map((query) => normalizeWhitespace(query))
+      .filter((query) => query && !hasHangul(query)))).slice(0, 3)
+    const nextQueries = queries.length > 0 ? queries : fallback
+    cache[cacheKey] = {
+      queries: nextQueries,
+      fetchedAt: new Date().toISOString()
+    }
+    writeJsonCache(paperQueryCachePath, cache)
+    return nextQueries
+  } catch {
+    cache[cacheKey] = {
+      queries: fallback,
+      fetchedAt: new Date().toISOString()
+    }
+    writeJsonCache(paperQueryCachePath, cache)
+    return fallback
+  }
+}
+
 function hydrateAbstract(index?: Record<string, number[]>) {
   if (!index) return ''
   const terms = Object.entries(index)
@@ -219,7 +339,7 @@ async function searchPaperCandidates(query: string) {
   if (!normalizedQuery) return []
 
   const cache = readJsonCache<PaperSearchCacheEntry>(paperSearchCachePath)
-  const cacheKey = normalizeText(normalizedQuery)
+  const cacheKey = `v2:openalex:${normalizeText(normalizedQuery)}`
   const cached = cache[cacheKey]
   if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
     return cached.candidates
@@ -266,6 +386,149 @@ async function searchPaperCandidates(query: string) {
     return candidates
   } catch {
     return []
+  }
+}
+
+async function searchArxivCandidates(query: string) {
+  const normalizedQuery = normalizeWhitespace(query)
+  if (!normalizedQuery) return []
+
+  const cache = readJsonCache<PaperSearchCacheEntry>(paperSearchCachePath)
+  const cacheKey = `v2:arxiv:${normalizeText(normalizedQuery)}`
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
+    return cached.candidates
+  }
+
+  try {
+    const xml = await fetchText(
+      `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(normalizedQuery)}&start=0&max_results=5&sortBy=relevance&sortOrder=descending`
+    )
+    const $ = load(xml, { xmlMode: true })
+    const candidates = $('entry')
+      .toArray()
+      .map((entry): PaperCandidate | null => {
+        const element = $(entry)
+        const title = normalizeWhitespace(element.find('title').first().text())
+        const idText = normalizeWhitespace(element.find('id').first().text())
+        if (!title || !idText) return null
+        const abstract = normalizeWhitespace(element.find('summary').first().text())
+        const pdfUrl =
+          element.find('link[title="pdf"]').attr('href')
+          || element.find('link[type="application/pdf"]').attr('href')
+          || undefined
+        const canonicalUrl = ensureArxivAbs(idText) ?? idText
+        return {
+          id: canonicalUrl,
+          title,
+          canonicalUrl,
+          htmlUrl: ensureArxivHtml(idText),
+          pdfUrl,
+          abstract
+        }
+      })
+      .filter((candidate): candidate is PaperCandidate => candidate !== null)
+      .filter((candidate) => Boolean(candidate.htmlUrl || candidate.pdfUrl || candidate.abstract))
+      .slice(0, 3)
+
+    cache[cacheKey] = {
+      candidates,
+      fetchedAt: new Date().toISOString()
+    }
+    writeJsonCache(paperSearchCachePath, cache)
+    return candidates
+  } catch {
+    return []
+  }
+}
+
+function paperRankCacheKey(record: {
+  nodeId: string
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}, candidates: PaperCandidate[]) {
+  return `v1:${normalizeText(`${record.nodeId}\n${record.title}\n${record.topic}\n${record.summary}\n${record.keyConcepts.join(' ')}\n${candidates.map((candidate) => `${candidate.id} ${candidate.title} ${candidate.abstract ?? ''}`).join('\n')}`)}`
+}
+
+async function rerankPaperCandidates(record: {
+  nodeId: string
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}, candidates: PaperCandidate[]) {
+  if (candidates.length <= 1) return candidates
+
+  const cache = readJsonCache<PaperRankCacheEntry>(paperRankCachePath)
+  const cacheKey = paperRankCacheKey(record, candidates)
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+    const ranked = cached.rankedIds
+      .map((id) => byId.get(id))
+      .filter((candidate): candidate is PaperCandidate => Boolean(candidate))
+    if (ranked.length > 0) return ranked
+  }
+
+  const systemPrompt = [
+    'Rerank research paper candidates for a wiki topic.',
+    'Prefer papers that directly explain or support the core technical idea of the wiki.',
+    'Avoid papers that only match an ambiguous abbreviation or a shallow keyword.',
+    'Return up to 3 candidate ids in descending relevance.',
+    'Return JSON only: {"rankedIds":[string]}'
+  ].join(' ')
+
+  const payload = {
+    wiki: {
+      title: record.title,
+      topic: record.topic,
+      summary: record.summary,
+      keyConcepts: record.keyConcepts.slice(0, 8)
+    },
+    candidates: candidates.map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title,
+      abstract: snippet(candidate.abstract ?? '', 320),
+      canonicalUrl: candidate.canonicalUrl
+    }))
+  }
+
+  try {
+    let raw: string | undefined
+    if (useCodexAuth) {
+      raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
+        instructions: systemPrompt,
+        input: JSON.stringify(payload)
+      }))
+    } else {
+      const response = await client.chat.completions.create({
+        model: defaultModel,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: JSON.stringify(payload) }
+        ]
+      })
+      raw = response.choices[0]?.message?.content ?? undefined
+    }
+    const parsed = raw ? JSON.parse(raw) as { rankedIds?: string[] } : {}
+    const rankedIds = Array.from(new Set(parsed.rankedIds ?? [])).slice(0, 3)
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+    const ranked = rankedIds
+      .map((id) => byId.get(id))
+      .filter((candidate): candidate is PaperCandidate => Boolean(candidate))
+    const nextRanked = ranked.length > 0 ? ranked : candidates.slice(0, 3)
+    cache[cacheKey] = {
+      rankedIds: nextRanked.map((candidate) => candidate.id),
+      fetchedAt: new Date().toISOString()
+    }
+    writeJsonCache(paperRankCachePath, cache)
+    return nextRanked
+  } catch {
+    return candidates.slice(0, 3)
   }
 }
 
@@ -434,9 +697,28 @@ async function buildWikiPaperFirstContext(record: {
   summary: string
   keyConcepts: string[]
 }) {
-  const query = buildWikiPaperQuery(record)
-  const queryTokens = extractTokens(query)
-  const candidates = await searchPaperCandidates(query)
+  const queries = await generatePaperSearchQueries(record)
+  const queryTokens = extractTokens(queries.join(' '))
+  const arxivCandidateGroups = await Promise.all(
+    queries.map((query) => searchArxivCandidates(query))
+  )
+  const arxivCandidates = Array.from(new Map(
+    arxivCandidateGroups.flat().map((candidate) => [candidate.id, candidate])
+  ).values())
+  const rankedArxivCandidates = await rerankPaperCandidates(record, arxivCandidates)
+  const openAlexCandidateGroups = rankedArxivCandidates.length > 0
+    ? []
+    : await Promise.all(
+      Array.from(new Set([...queries, buildWikiPaperQuery(record)].map((query) => normalizeWhitespace(query)).filter(Boolean)))
+        .slice(0, 3)
+        .map((query) => searchPaperCandidates(query))
+    )
+  const openAlexCandidates = Array.from(new Map(
+    openAlexCandidateGroups.flat().map((candidate) => [candidate.id, candidate])
+  ).values())
+  const candidates = rankedArxivCandidates.length > 0
+    ? rankedArxivCandidates
+    : await rerankPaperCandidates(record, openAlexCandidates)
 
   const paperResults = await Promise.all(
     candidates.map(async (candidate, index) => {
