@@ -152,6 +152,7 @@ export default function KnowledgeAgentApp() {
   const [scrapQuery, setScrapQuery] = useState('')
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(false)
+  const [chatLoading, setChatLoading] = useState(false)
   const [graphLoading, setGraphLoading] = useState(false)
   const [wikiProgress, setWikiProgress] = useState<{ completed: number; total: number; title?: string } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -198,7 +199,7 @@ export default function KnowledgeAgentApp() {
       top: node.scrollHeight,
       behavior: 'smooth'
     })
-  }, [messages, loading])
+  }, [messages, loading, chatLoading])
 
   const refresh = useCallback(async (query = scrapQuery) => {
     setRefreshing(true)
@@ -577,6 +578,7 @@ export default function KnowledgeAgentApp() {
     const nextPrompt = prompt
     setPrompt('')
     setLoading(true)
+    setChatLoading(true)
     // Ask always targets the full knowledge base; selection state is only used for bulk management actions.
     setMessages((current) => [...current, { role: 'user', text: nextPrompt }])
     try {
@@ -596,6 +598,7 @@ export default function KnowledgeAgentApp() {
     } catch (error) {
       setMessages((current) => [...current, { role: 'system', text: normalizeUiError(error, '채팅 실행에 실패했습니다.') }])
     } finally {
+      setChatLoading(false)
       setLoading(false)
     }
   }
@@ -760,6 +763,17 @@ export default function KnowledgeAgentApp() {
                 ) : null}
               </div>
             ))}
+            {chatLoading ? (
+              <div className='chat-item agent' aria-live='polite'>
+                <div className='bubble agent bubble-pending' aria-label='응답 생성 중'>
+                  <span className='pending-dots' aria-hidden='true'>
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              </div>
+            ) : null}
           </div>
           <textarea
             className='textarea ask-textarea'

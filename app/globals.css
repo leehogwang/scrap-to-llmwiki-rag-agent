@@ -509,6 +509,35 @@ a {
   background: rgba(24, 28, 33, 0.88);
 }
 
+.bubble-pending {
+  min-width: 52px;
+  text-align: center;
+  opacity: 0.9;
+}
+
+.pending-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pending-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.34;
+  animation: pending-dot-bounce 1.05s ease-in-out infinite;
+}
+
+.pending-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.pending-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
 .bubble-markdown {
   display: grid;
   gap: 10px;
@@ -532,11 +561,15 @@ a {
 
 .bubble-markdown ul,
 .bubble-markdown ol {
-  padding-left: 18px;
+  padding-left: 15px;
 }
 
 .bubble-markdown li + li {
-  margin-top: 4px;
+  margin-top: 2px;
+}
+
+.bubble-markdown li::marker {
+  color: rgba(232, 237, 242, 0.72);
 }
 
 .bubble-markdown h1,
@@ -616,6 +649,19 @@ a {
 .chat-save-button:disabled {
   opacity: 0.58;
   cursor: default;
+}
+
+@keyframes pending-dot-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 0.95;
+    transform: translateY(-2px);
+  }
 }
 
 .graph-shell {
