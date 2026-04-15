@@ -10,3 +10,5 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 npm-debug.log*
 *.log
+docs/presentation/
+docs/report/
