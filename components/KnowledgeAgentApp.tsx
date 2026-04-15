@@ -1343,6 +1343,43 @@ export default function KnowledgeAgentApp() {
                 </section>
 
                 <section className='wiki-block'>
+                  <h4 className='wiki-block-title'>아이디어 제시</h4>
+                  <p className='wiki-summary'>
+                    {detail.item.surprisingConnection?.ideaSuggestion ??
+                      detail.item.edge.ideaSuggestion ??
+                      '이 조합으로부터 아직 별도 아이디어 제안은 생성되지 않았습니다.'}
+                  </p>
+                </section>
+
+                {((detail.item.surprisingConnection?.supportingSources?.length ?? 0) > 0 ||
+                  (detail.item.edge.supportingSources?.length ?? 0) > 0) ? (
+                  <section className='wiki-block'>
+                    <h4 className='wiki-block-title'>논문 근거 / 참고 자료</h4>
+                    <div className='wiki-claim-grid'>
+                      {(detail.item.surprisingConnection?.supportingSources ?? detail.item.edge.supportingSources ?? []).map((source) => (
+                        <article key={source.id} className='wiki-claim-card'>
+                          <div className='wiki-claim-head'>
+                            <strong>{source.title}</strong>
+                            <span className='status-pill published'>
+                              {source.type === 'paper' ? 'paper' : 'web'} · {source.extractionMode}
+                            </span>
+                          </div>
+                          <p className='wiki-paragraph'>{source.excerpt}</p>
+                          <a
+                            className='source-link'
+                            href={source.url}
+                            target='_blank'
+                            rel='noreferrer'
+                          >
+                            원문 보기
+                          </a>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                <section className='wiki-block'>
                   <h4 className='wiki-block-title'>추가 질문 팁</h4>
                   <ul className='wiki-list'>
                     <li>

@@ -1,6 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 import OpenAI from 'openai'
+import pdf from 'pdf-parse/lib/pdf-parse'
+import { load } from 'cheerio'
 import {
   listScraps,
   listWikiDrafts
@@ -17,6 +19,7 @@ import type {
   GraphifyNodeDetail,
   GraphifyPayload,
   GraphifyProvenance,
+  GraphifySupportSource,
   GraphifySurprisingConnection,
   Scrap,
   WikiDraft
@@ -24,6 +27,9 @@ import type {
 
 const dataDir = path.join(process.cwd(), 'data')
 const cachePath = path.join(dataDir, 'graphify-cache.json')
+const webCachePath = path.join(dataDir, 'graphify-web-cache.json')
+const paperSearchCachePath = path.join(dataDir, 'graphify-paper-search-cache.json')
+const paperContentCachePath = path.join(dataDir, 'graphify-paper-content-cache.json')
 const defaultModel = getOptionalEnv('OPENAI_MODEL', 'gpt-4.1-mini')
 const useCodexAuth = getOptionalEnv('USE_CODEX_AUTH', 'false') === 'true'
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex'
@@ -96,6 +102,371 @@ function writeCache(payload: GraphifyPayload) {
   fs.writeFileSync(cachePath, JSON.stringify(payload, null, 2), 'utf8')
 }
 
+type WebCacheEntry = {
+  notes: string[]
+  fetchedAt: string
+}
+
+type PaperSearchCacheEntry = {
+  candidates: PaperCandidate[]
+  fetchedAt: string
+}
+
+type PaperContentCacheEntry = {
+  result: PaperExtractedContent
+  fetchedAt: string
+}
+
+type PaperCandidate = {
+  id: string
+  title: string
+  canonicalUrl: string
+  htmlUrl?: string
+  pdfUrl?: string
+  abstract?: string
+}
+
+type PaperExtractedContent = {
+  title: string
+  canonicalUrl: string
+  extractionMode: GraphifySupportSource['extractionMode']
+  paragraphs: string[]
+}
+
+function readJsonCache<T>(filePath: string) {
+  if (!fs.existsSync(filePath)) return {} as Record<string, T>
+  return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, T>
+}
+
+function writeJsonCache<T>(filePath: string, value: Record<string, T>) {
+  fs.mkdirSync(dataDir, { recursive: true })
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8')
+}
+
+function hasHangul(value: string) {
+  return /[가-힣]/.test(value)
+}
+
+async function fetchJson<T>(url: string) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'ClipWiki/1.0 (Graphify paper enrichment)' }
+  })
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`)
+  return await response.json() as T
+}
+
+async function fetchText(url: string) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'ClipWiki/1.0 (Graphify paper enrichment)' }
+  })
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`)
+  return await response.text()
+}
+
+async function fetchArrayBuffer(url: string) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'ClipWiki/1.0 (Graphify paper enrichment)' }
+  })
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`)
+  return await response.arrayBuffer()
+}
+
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function buildWikiPaperQuery(record: {
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}) {
+  const terms = [
+    record.title,
+    record.topic,
+    ...record.keyConcepts.slice(0, 4)
+  ]
+    .map((term) => normalizeWhitespace(term))
+    .filter(Boolean)
+  return Array.from(new Set(terms)).join(' ')
+}
+
+function hydrateAbstract(index?: Record<string, number[]>) {
+  if (!index) return ''
+  const terms = Object.entries(index)
+    .flatMap(([term, positions]) => positions.map((position) => ({ term, position })))
+    .sort((left, right) => left.position - right.position)
+    .map((entry) => entry.term)
+  return normalizeWhitespace(terms.join(' '))
+}
+
+function ensureArxivHtml(url: string) {
+  const match = url.match(/arxiv\.org\/(?:abs|pdf|html)\/([^?#]+)/i)
+  if (!match) return undefined
+  const rawId = match[1].replace(/\.pdf$/i, '')
+  return `https://arxiv.org/html/${rawId}`
+}
+
+function ensureArxivAbs(url: string) {
+  const match = url.match(/arxiv\.org\/(?:abs|pdf|html)\/([^?#]+)/i)
+  if (!match) return undefined
+  const rawId = match[1].replace(/\.pdf$/i, '')
+  return `https://arxiv.org/abs/${rawId}`
+}
+
+async function searchPaperCandidates(query: string) {
+  const normalizedQuery = normalizeWhitespace(query)
+  if (!normalizedQuery) return []
+
+  const cache = readJsonCache<PaperSearchCacheEntry>(paperSearchCachePath)
+  const cacheKey = normalizeText(normalizedQuery)
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
+    return cached.candidates
+  }
+
+  try {
+    const data = await fetchJson<{
+      results?: Array<{
+        id?: string
+        display_name?: string
+        abstract_inverted_index?: Record<string, number[]>
+        primary_location?: { landing_page_url?: string | null; pdf_url?: string | null }
+        best_oa_location?: { landing_page_url?: string | null; pdf_url?: string | null }
+        ids?: { doi?: string | null; pmcid?: string | null; pmid?: string | null; arxiv?: string | null }
+      }>
+    }>(`https://api.openalex.org/works?search=${encodeURIComponent(normalizedQuery)}&per-page=6&mailto=clipwiki@example.com`)
+
+    const candidates = (data.results ?? [])
+      .map<PaperCandidate | null>((result, index) => {
+        const title = normalizeWhitespace(result.display_name ?? '')
+        if (!title) return null
+        const arxivUrl = result.ids?.arxiv ?? undefined
+        const htmlUrl = arxivUrl ? ensureArxivHtml(arxivUrl) : (result.best_oa_location?.landing_page_url ?? result.primary_location?.landing_page_url ?? undefined) || undefined
+        const canonicalUrl = arxivUrl ? (ensureArxivAbs(arxivUrl) ?? arxivUrl) : (result.best_oa_location?.landing_page_url ?? result.primary_location?.landing_page_url ?? result.id ?? `openalex:${index}`)
+        const pdfUrl = result.best_oa_location?.pdf_url ?? result.primary_location?.pdf_url ?? undefined
+        return {
+          id: result.id ?? canonicalUrl,
+          title,
+          canonicalUrl,
+          htmlUrl,
+          pdfUrl,
+          abstract: hydrateAbstract(result.abstract_inverted_index)
+        } satisfies PaperCandidate
+      })
+      .filter((candidate): candidate is PaperCandidate => candidate !== null)
+      .filter((candidate) => Boolean(candidate.htmlUrl || candidate.pdfUrl || candidate.abstract))
+      .slice(0, 3)
+
+    cache[cacheKey] = {
+      candidates,
+      fetchedAt: new Date().toISOString()
+    }
+    writeJsonCache(paperSearchCachePath, cache)
+    return candidates
+  } catch {
+    return []
+  }
+}
+
+function extractHtmlParagraphs(html: string) {
+  const $ = load(html)
+  $('script, style, nav, footer, header, aside, .references, #references').remove()
+  const scope = $('article').first().length ? $('article').first() : $('main').first().length ? $('main').first() : $('body')
+  const paragraphs = scope
+    .find('p')
+    .map((_, element) => normalizeWhitespace($(element).text()))
+    .get()
+    .filter((paragraph) => paragraph.length >= 140)
+  return Array.from(new Set(paragraphs))
+}
+
+function extractPdfParagraphs(text: string) {
+  return text
+    .split(/\n\s*\n/g)
+    .map((paragraph) => normalizeWhitespace(paragraph))
+    .filter((paragraph) => paragraph.length >= 180 && paragraph.length <= 1800)
+}
+
+function scoreParagraph(queryTokens: string[], paragraph: string, index: number, total: number) {
+  const paragraphTokens = extractTokens(paragraph)
+  const overlap = overlapScore(queryTokens, paragraphTokens)
+  const lexical = jaccard(queryTokens, paragraphTokens)
+  const introBias = index < 8 ? 0.2 : 0
+  const outroBias = index >= Math.max(0, total - 4) ? 0.1 : 0
+  return overlap * 1.25 + lexical + introBias + outroBias
+}
+
+function selectRelevantParagraphs(queryTokens: string[], paragraphs: string[]) {
+  return paragraphs
+    .map((paragraph, index) => ({
+      paragraph,
+      score: scoreParagraph(queryTokens, paragraph, index, paragraphs.length)
+    }))
+    .filter((entry) => entry.score > 0.2)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 6)
+    .map((entry) => snippet(entry.paragraph, 420))
+}
+
+async function resolvePaperContent(candidate: PaperCandidate, queryTokens: string[]) {
+  const cache = readJsonCache<PaperContentCacheEntry>(paperContentCachePath)
+  const cacheKey = candidate.canonicalUrl
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 7 * 24 * 60 * 60 * 1000) {
+    return cached.result
+  }
+
+  const attempts: Array<() => Promise<PaperExtractedContent | null>> = []
+  if (candidate.htmlUrl) {
+    attempts.push(async () => {
+      const html = await fetchText(candidate.htmlUrl!)
+      const paragraphs = selectRelevantParagraphs(queryTokens, extractHtmlParagraphs(html))
+      if (paragraphs.length === 0) return null
+      return {
+        title: candidate.title,
+        canonicalUrl: candidate.canonicalUrl,
+        extractionMode: 'html_full',
+        paragraphs
+      }
+    })
+  }
+  if (candidate.pdfUrl) {
+    attempts.push(async () => {
+      const buffer = Buffer.from(await fetchArrayBuffer(candidate.pdfUrl!))
+      const parsed = await pdf(buffer)
+      const paragraphs = selectRelevantParagraphs(queryTokens, extractPdfParagraphs(parsed.text))
+      if (paragraphs.length === 0) return null
+      return {
+        title: candidate.title,
+        canonicalUrl: candidate.canonicalUrl,
+        extractionMode: 'pdf_full',
+        paragraphs
+      }
+    })
+  }
+  if (candidate.abstract) {
+    const abstract = candidate.abstract
+    attempts.push(async () => ({
+      title: candidate.title,
+      canonicalUrl: candidate.canonicalUrl,
+      extractionMode: 'abstract_only',
+      paragraphs: [snippet(abstract, 420)]
+    }))
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt()
+      if (!result) continue
+      cache[cacheKey] = {
+        result,
+        fetchedAt: new Date().toISOString()
+      }
+      writeJsonCache(paperContentCachePath, cache)
+      return result
+    } catch {
+      continue
+    }
+  }
+
+  return null
+}
+
+async function fetchWikipediaSupportSources(term: string, ownerWikiId: string) {
+  const normalized = term.replace(/\s+/g, ' ').trim()
+  if (!normalized) return []
+  const languageHost = hasHangul(normalized) ? 'ko.wikipedia.org' : 'en.wikipedia.org'
+  const cacheKey = `${languageHost}:${normalizeText(normalized)}`
+  const cache = readJsonCache<WebCacheEntry>(webCachePath)
+  const cached = cache[cacheKey]
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 24 * 60 * 60 * 1000) {
+    return cached.notes.map((note, index) => ({
+      id: `${cacheKey}:web:${index + 1}`,
+      ownerWikiId,
+      type: 'web' as const,
+      title: normalized,
+      url: `https://${languageHost}/wiki/${encodeURIComponent(normalized.replace(/\s+/g, '_'))}`,
+      extractionMode: 'web_note' as const,
+      excerpt: note
+    }))
+  }
+
+  try {
+    const searchData = await fetchJson<{ pages?: Array<{ key?: string; title?: string; description?: string }> }>(
+      `https://${languageHost}/w/rest.php/v1/search/title?q=${encodeURIComponent(normalized)}&limit=2`
+    )
+    const notes: string[] = []
+    const sources: GraphifySupportSource[] = []
+
+    for (const page of (searchData.pages ?? []).slice(0, 2)) {
+      if (!page.key) continue
+      const summary = await fetchJson<{ title?: string; extract?: string; content_urls?: { desktop?: { page?: string } } }>(
+        `https://${languageHost}/api/rest_v1/page/summary/${encodeURIComponent(page.key)}`
+      )
+      const excerpt = normalizeWhitespace(summary.extract ?? page.description ?? '')
+      if (!excerpt) continue
+      notes.push(`${summary.title ?? page.title ?? normalized}: ${snippet(excerpt, 180)}`)
+      sources.push({
+        id: `${cacheKey}:web:${sources.length + 1}`,
+        ownerWikiId,
+        type: 'web',
+        title: summary.title ?? page.title ?? normalized,
+        url: summary.content_urls?.desktop?.page ?? `https://${languageHost}/wiki/${encodeURIComponent(page.key)}`,
+        extractionMode: 'web_note',
+        excerpt: snippet(excerpt, 220)
+      })
+      if (sources.length >= 2) break
+    }
+
+    cache[cacheKey] = { notes, fetchedAt: new Date().toISOString() }
+    writeJsonCache(webCachePath, cache)
+    return sources
+  } catch {
+    return []
+  }
+}
+
+async function buildWikiPaperFirstContext(record: {
+  nodeId: string
+  title: string
+  topic: string
+  summary: string
+  keyConcepts: string[]
+}) {
+  const query = buildWikiPaperQuery(record)
+  const queryTokens = extractTokens(query)
+  const candidates = await searchPaperCandidates(query)
+
+  const paperResults = await Promise.all(
+    candidates.map(async (candidate, index) => {
+      const content = await resolvePaperContent(candidate, queryTokens)
+      if (!content) return []
+      return content.paragraphs.map((paragraph, paragraphIndex) => ({
+        id: `${record.nodeId}:paper:${index + 1}:${paragraphIndex + 1}`,
+        ownerWikiId: record.nodeId,
+        type: 'paper' as const,
+        title: content.title,
+        url: content.canonicalUrl,
+        extractionMode: content.extractionMode,
+        excerpt: paragraph
+      } satisfies GraphifySupportSource))
+    })
+  )
+
+  const paperSources = paperResults.flat().slice(0, 6)
+  if (paperSources.length > 0) return paperSources
+
+  const fallbackTerms = Array.from(
+    new Set([record.title, record.topic, ...record.keyConcepts.slice(0, 3)].map((value) => value.trim()).filter(Boolean))
+  ).slice(0, 3)
+
+  const webResults = await Promise.all(
+    fallbackTerms.map((term) => fetchWikipediaSupportSources(term, record.nodeId))
+  )
+  return webResults.flat().slice(0, 4)
+}
+
 function latestSourceTimestamp(scraps: Scrap[], drafts: WikiDraft[]) {
   return Math.max(
     0,
@@ -144,6 +515,8 @@ function makeEdge(
     confidence?: number
     weight?: number
     explanation?: string
+    ideaSuggestion?: string
+    supportingSources?: GraphifySupportSource[]
   } = {}
 ): GraphifyEdge {
   const safeSource = source < target ? source : target
@@ -156,7 +529,9 @@ function makeEdge(
     provenance: options.provenance ?? 'EXTRACTED',
     confidence: options.confidence ?? 1,
     weight: options.weight ?? 1,
-    explanation: options.explanation
+    explanation: options.explanation,
+    ideaSuggestion: options.ideaSuggestion,
+    supportingSources: options.supportingSources
   }
 }
 
@@ -256,7 +631,15 @@ async function inferSurprisingConnections(
       topic: string
       summary: string
       keyConcepts: string[]
+      supportingSources?: GraphifySupportSource[]
     }>
+
+  const enrichedWikiRecords = await Promise.all(
+    wikiRecords.map(async (record) => ({
+      ...record,
+      supportingSources: await buildWikiPaperFirstContext(record)
+    }))
+  )
 
   if (wikiRecords.length < 2) {
     edges.forEach((edge) => {
@@ -267,12 +650,16 @@ async function inferSurprisingConnections(
   }
 
   const systemPrompt = [
-    'You identify surprising knowledge graph connections between wiki summaries.',
+    'You identify surprising knowledge graph connections between wiki summaries using paper-first evidence.',
     'Only consider wiki-to-wiki links.',
     'Use the overall idea, design pattern, conceptual overlap, or hidden strategic similarity.',
     'Do not rely on shallow lexical similarity alone.',
+    'Use the provided supporting sources as evidence. These are paper excerpts first, then optional web fallback notes.',
     'Allowed relations: related_to, supports, conflicts_with, about.',
-    'Return only JSON in this format: {"surprising_edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"reason":string}]}',
+    'For each surprising pair, explain why the connection is interesting and suggest one concrete idea that combines the two wiki themes.',
+    'The idea should sound like: "이런 점이 결합되는데, 이러면 어떨까요?" and be actionable rather than abstract.',
+    'For each edge, return up to 4 supportingSourceIds chosen only from the supplied supportingSources of the two wikis.',
+    'Return only JSON in this format: {"surprising_edges":[{"leftId":string,"rightId":string,"relation":string,"confidence":number,"reason":string,"ideaSuggestion":string,"supportingSourceIds":[string]}]}',
     'Use the provided wiki node ids exactly. Return at most 8 surprising edges.'
   ].join(' ')
 
@@ -281,7 +668,7 @@ async function inferSurprisingConnections(
   if (useCodexAuth) {
     raw = JSON.stringify(await runCodexJson<Record<string, unknown>>({
       instructions: systemPrompt,
-      input: JSON.stringify({ wikis: wikiRecords })
+      input: JSON.stringify({ wikis: enrichedWikiRecords })
     }))
   } else {
     // --- 기존: Chat Completions API ---
@@ -291,7 +678,7 @@ async function inferSurprisingConnections(
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: JSON.stringify({ wikis: wikiRecords }) }
+        { role: 'user', content: JSON.stringify({ wikis: enrichedWikiRecords }) }
       ]
     })
     raw = response.choices[0]?.message?.content ?? undefined
@@ -311,11 +698,14 @@ async function inferSurprisingConnections(
       relation: string
       confidence?: number
       reason?: string
+      ideaSuggestion?: string
+      supportingSourceIds?: string[]
     }>
   }
 
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
-  const wikiIdSet = new Set(wikiRecords.map((wiki) => wiki.nodeId))
+  const wikiById = new Map(enrichedWikiRecords.map((wiki) => [wiki.nodeId, wiki]))
+  const wikiIdSet = new Set(enrichedWikiRecords.map((wiki) => wiki.nodeId))
   const nextSurprisingIds = new Set<string>()
   const surprisingConnections: GraphifySurprisingConnection[] = []
 
@@ -330,6 +720,14 @@ async function inferSurprisingConnections(
     if (!['related_to', 'supports', 'conflicts_with', 'about'].includes(item.relation)) continue
 
     const confidence = typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.72
+    const availableSources = [
+      ...(wikiById.get(item.leftId)?.supportingSources ?? []),
+      ...(wikiById.get(item.rightId)?.supportingSources ?? [])
+    ]
+    const supportingSources = (item.supportingSourceIds ?? [])
+      .map((sourceId) => availableSources.find((source) => source.id === sourceId))
+      .filter((source): source is GraphifySupportSource => Boolean(source))
+      .slice(0, 4)
     const edgeId = `${item.leftId < item.rightId ? item.leftId : item.rightId}::${item.relation}::${item.leftId < item.rightId ? item.rightId : item.leftId}`
     let edge = edges.find((current) => current.id === edgeId)
     if (!edge) {
@@ -337,11 +735,15 @@ async function inferSurprisingConnections(
         provenance: 'INFERRED',
         confidence,
         weight: Math.max(1, Math.round(confidence * 3)),
-        explanation: item.reason?.slice(0, 240)
+        explanation: item.reason?.slice(0, 240),
+        ideaSuggestion: item.ideaSuggestion?.slice(0, 240),
+        supportingSources
       })
       edges.push(edge)
     } else {
       edge.explanation = item.reason?.slice(0, 240) ?? edge.explanation
+      edge.ideaSuggestion = item.ideaSuggestion?.slice(0, 240) ?? edge.ideaSuggestion
+      edge.supportingSources = supportingSources.length > 0 ? supportingSources : edge.supportingSources
       edge.confidence = Math.max(edge.confidence, confidence)
     }
     edge.surprising = true
@@ -359,7 +761,9 @@ async function inferSurprisingConnections(
       targetLabel: right.label,
       relation: edge.relation,
       confidence,
-      explanation: item.reason?.slice(0, 240)
+      explanation: item.reason?.slice(0, 240),
+      ideaSuggestion: item.ideaSuggestion?.slice(0, 240),
+      supportingSources
     })
   }
 
@@ -645,6 +1049,8 @@ export function getGraphContextForPrompt(prompt: string) {
         relation: GraphifyEdgeRelation
         confidence: number
         explanation?: string
+        ideaSuggestion?: string
+        supportingSources?: GraphifySupportSource[]
       }>
     }
   }
@@ -693,7 +1099,9 @@ export function getGraphContextForPrompt(prompt: string) {
       targetLabel: entry.connection.targetLabel,
       relation: entry.connection.relation,
       confidence: entry.connection.confidence,
-      explanation: entry.connection.explanation
+      explanation: entry.connection.explanation,
+      ideaSuggestion: entry.connection.ideaSuggestion,
+      supportingSources: entry.connection.supportingSources
     }))
 
   return {

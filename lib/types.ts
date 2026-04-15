@@ -193,6 +193,8 @@ export interface GraphifyEdge {
   confidence: number
   weight: number
   explanation?: string
+  ideaSuggestion?: string
+  supportingSources?: GraphifySupportSource[]
   surprising?: boolean
   surprisingScore?: number
 }
@@ -220,6 +222,21 @@ export interface GraphifySurprisingConnection {
   relation: GraphifyEdgeRelation
   confidence: number
   explanation?: string
+  ideaSuggestion?: string
+  supportingSources?: GraphifySupportSource[]
+}
+
+export type GraphifySupportSourceType = 'paper' | 'web'
+export type GraphifySupportExtractionMode = 'html_full' | 'pdf_full' | 'abstract_only' | 'web_note'
+
+export interface GraphifySupportSource {
+  id: string
+  ownerWikiId: string
+  type: GraphifySupportSourceType
+  title: string
+  url: string
+  extractionMode: GraphifySupportExtractionMode
+  excerpt: string
 }
 
 export interface GraphifyPayload {

@@ -902,7 +902,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       JSON.stringify(allScraps),
       'Answer the user in Korean.',
       'Use the saved wiki drafts first, then use scraps to fill gaps.',
-      'If the prompt asks about surprising connections or why two ideas are connected, use the prefetched surprising connection explanations when relevant.',
+      'If the prompt asks about surprising connections or why two ideas are connected, use the prefetched surprising connection explanations, paper-backed supporting sources, and idea suggestions when relevant.',
       'Do not mention internal ids unless the user asks.',
       'If the user is effectively asking to refresh or build wiki pages, tell them to use the "위키 생성/갱신" button instead of pretending that it already happened.'
     ].join('\n\n')
