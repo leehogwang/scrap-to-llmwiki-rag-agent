@@ -9,6 +9,9 @@
   let suppressNextClickUntil = 0
   let overlay = null
   let selectionBox = null
+  let memoPanel = null
+  let memoTextarea = null
+  let memoResolver = null
 
   function ensureOverlay() {
     if (overlay) return
@@ -37,6 +40,157 @@
   function hideOverlay() {
     if (!overlay) return
     overlay.style.display = 'none'
+  }
+
+  function ensureMemoPanel() {
+    if (memoPanel) return
+
+    memoPanel = document.createElement('div')
+    memoPanel.style.position = 'fixed'
+    memoPanel.style.top = '24px'
+    memoPanel.style.right = '24px'
+    memoPanel.style.width = '320px'
+    memoPanel.style.maxWidth = 'calc(100vw - 48px)'
+    memoPanel.style.padding = '16px'
+    memoPanel.style.borderRadius = '18px'
+    memoPanel.style.border = '1px solid rgba(148, 163, 184, 0.28)'
+    memoPanel.style.background = 'rgba(15, 23, 42, 0.97)'
+    memoPanel.style.boxShadow = '0 24px 60px rgba(15, 23, 42, 0.42)'
+    memoPanel.style.color = '#f8fafc'
+    memoPanel.style.font = '13px system-ui, sans-serif'
+    memoPanel.style.zIndex = '2147483647'
+    memoPanel.style.display = 'none'
+    memoPanel.style.pointerEvents = 'auto'
+
+    const title = document.createElement('div')
+    title.textContent = '스크랩 메모'
+    title.style.fontSize = '14px'
+    title.style.fontWeight = '700'
+    title.style.marginBottom = '6px'
+    memoPanel.appendChild(title)
+
+    const help = document.createElement('div')
+    help.textContent = '나중에 참고할 메모를 남길 수 있습니다. Enter로 저장하고, Shift+Enter로 줄바꿈합니다.'
+    help.style.color = '#cbd5e1'
+    help.style.lineHeight = '1.5'
+    help.style.marginBottom = '10px'
+    memoPanel.appendChild(help)
+
+    memoTextarea = document.createElement('textarea')
+    memoTextarea.rows = 5
+    memoTextarea.placeholder = '예: 나중에 음식 프로젝트에 적용하면 좋을 듯'
+    memoTextarea.style.width = '100%'
+    memoTextarea.style.boxSizing = 'border-box'
+    memoTextarea.style.borderRadius = '14px'
+    memoTextarea.style.border = '1px solid rgba(148, 163, 184, 0.28)'
+    memoTextarea.style.background = 'rgba(15, 23, 42, 0.9)'
+    memoTextarea.style.color = '#f8fafc'
+    memoTextarea.style.padding = '10px 12px'
+    memoTextarea.style.font = '13px system-ui, sans-serif'
+    memoTextarea.style.lineHeight = '1.5'
+    memoTextarea.style.resize = 'vertical'
+    memoTextarea.style.minHeight = '108px'
+    memoPanel.appendChild(memoTextarea)
+
+    const actions = document.createElement('div')
+    actions.style.display = 'flex'
+    actions.style.justifyContent = 'space-between'
+    actions.style.gap = '8px'
+    actions.style.marginTop = '12px'
+
+    const cancelButton = document.createElement('button')
+    cancelButton.type = 'button'
+    cancelButton.textContent = '취소'
+    cancelButton.style.flex = '1'
+    cancelButton.style.borderRadius = '12px'
+    cancelButton.style.border = '1px solid rgba(148, 163, 184, 0.24)'
+    cancelButton.style.background = 'rgba(15, 23, 42, 0.82)'
+    cancelButton.style.color = '#e2e8f0'
+    cancelButton.style.padding = '10px 12px'
+    cancelButton.style.cursor = 'pointer'
+
+    const skipButton = document.createElement('button')
+    skipButton.type = 'button'
+    skipButton.textContent = '메모 없이 저장'
+    skipButton.style.flex = '1.3'
+    skipButton.style.borderRadius = '12px'
+    skipButton.style.border = '1px solid rgba(148, 163, 184, 0.24)'
+    skipButton.style.background = 'rgba(8, 47, 73, 0.92)'
+    skipButton.style.color = '#cffafe'
+    skipButton.style.padding = '10px 12px'
+    skipButton.style.cursor = 'pointer'
+
+    const saveButton = document.createElement('button')
+    saveButton.type = 'button'
+    saveButton.textContent = '메모 저장 후 스크랩'
+    saveButton.style.flex = '1.4'
+    saveButton.style.borderRadius = '12px'
+    saveButton.style.border = 'none'
+    saveButton.style.background = 'linear-gradient(135deg, #22d3ee, #0ea5e9)'
+    saveButton.style.color = '#082f49'
+    saveButton.style.padding = '10px 12px'
+    saveButton.style.fontWeight = '700'
+    saveButton.style.cursor = 'pointer'
+
+    cancelButton.addEventListener('click', () => {
+      if (!memoResolver) return
+      const resolve = memoResolver
+      memoResolver = null
+      closeMemoPanel()
+      resolve(null)
+    })
+
+    skipButton.addEventListener('click', () => {
+      if (!memoResolver) return
+      const resolve = memoResolver
+      memoResolver = null
+      closeMemoPanel()
+      resolve('')
+    })
+
+    saveButton.addEventListener('click', () => {
+      if (!memoResolver) return
+      const resolve = memoResolver
+      memoResolver = null
+      const note = memoTextarea?.value?.trim?.() || ''
+      closeMemoPanel()
+      resolve(note)
+    })
+
+    memoTextarea.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        saveButton.click()
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        cancelButton.click()
+      }
+    })
+
+    actions.appendChild(cancelButton)
+    actions.appendChild(skipButton)
+    actions.appendChild(saveButton)
+    memoPanel.appendChild(actions)
+    document.documentElement.appendChild(memoPanel)
+  }
+
+  function closeMemoPanel() {
+    if (!memoPanel) return
+    memoPanel.style.display = 'none'
+    if (memoTextarea) {
+      memoTextarea.value = ''
+    }
+  }
+
+  function openMemoPanel() {
+    ensureMemoPanel()
+    memoPanel.style.display = 'block'
+    memoTextarea.value = ''
+    window.setTimeout(() => memoTextarea?.focus(), 0)
+    return new Promise((resolve) => {
+      memoResolver = resolve
+    })
   }
 
   function updateSelectionBox(left, top, width, height) {
@@ -495,7 +649,15 @@
     }
   }
 
-  async function finishCapture(box) {
+  async function loadCaptureSettings() {
+    try {
+      return await chrome.storage.sync.get(['clipwikiMemoMode'])
+    } catch {
+      return { clipwikiMemoMode: false }
+    }
+  }
+
+  async function finishCapture(box, userNote = '') {
     const youtubeMeta =
       detectYouTubeCaptureFromElement(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) ||
       detectYouTubeCapture(box)
@@ -533,6 +695,7 @@
       pageTitle: youtubeMeta?.videoTitle || document.title || 'Untitled page',
       sourceHost: window.location.host,
       selectedText,
+      userNote,
       candidateChunks,
       imageUrls,
       imageCandidates,
@@ -591,18 +754,25 @@
   document.addEventListener('mouseup', async (event) => {
     if (!dragging) return
     dragging = false
-    hideOverlay()
 
     const left = Math.min(startX, event.clientX)
     const top = Math.min(startY, event.clientY)
     const width = Math.abs(event.clientX - startX)
     const height = Math.abs(event.clientY - startY)
     try {
+      const settings = await loadCaptureSettings()
       if (width < 8 || height < 8) {
         const clickMeta = detectYouTubeCaptureFromElement(startTarget || event.target || document.elementFromPoint(event.clientX, event.clientY))
         if (!clickMeta) {
+          hideOverlay()
           return
         }
+        const userNote = settings.clipwikiMemoMode ? await openMemoPanel() : ''
+        if (userNote === null) {
+          hideOverlay()
+          return
+        }
+        hideOverlay()
         suppressNextClickUntil = Date.now() + 1200
         await finishCapture({
           left: Math.max(0, event.clientX - 6),
@@ -611,17 +781,25 @@
           height: 12,
           right: event.clientX + 6,
           bottom: event.clientY + 6
-        })
+        }, userNote)
         event.preventDefault()
         event.stopImmediatePropagation()
         return
       }
 
+      const userNote = settings.clipwikiMemoMode ? await openMemoPanel() : ''
+      if (userNote === null) {
+        hideOverlay()
+        return
+      }
+      hideOverlay()
       suppressNextClickUntil = Date.now() + 1200
-      await finishCapture({ left, top, width, height, right: left + width, bottom: top + height })
+      await finishCapture({ left, top, width, height, right: left + width, bottom: top + height }, userNote)
       event.preventDefault()
       event.stopImmediatePropagation()
     } catch (error) {
+      hideOverlay()
+      closeMemoPanel()
       toast(error instanceof Error ? error.message : 'ClipWiki capture failed', false)
     }
   }, true)

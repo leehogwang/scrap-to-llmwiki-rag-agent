@@ -7,13 +7,14 @@ import {
   setSystemMetaValue
 } from '@/lib/server/db'
 import { rebuildGraphifyPayload } from '@/lib/server/graphify'
-import { createWikiDraftsFromSelection } from '@/lib/server/openai'
+import { approveWikiDraft, createWikiDraftsFromSelection, publishWikiDraft } from '@/lib/server/openai'
 
 export const runtime = 'nodejs'
 
 const requestSchema = z.object({
   forceGraph: z.boolean().optional().default(false),
-  forceWiki: z.boolean().optional().default(false)
+  forceWiki: z.boolean().optional().default(false),
+  autoApprove: z.boolean().optional().default(false)
 })
 
 function todayKey() {
@@ -84,6 +85,15 @@ export async function POST(request: NextRequest) {
       const freshScraps = getFreshUnassignedScraps()
       if (freshScraps.length > 0) {
         drafts = await createWikiDraftsFromSelection('', freshScraps, 'general')
+        if (parsed.autoApprove && drafts.length > 0) {
+          const finalized = []
+          for (const draft of drafts) {
+            const approved = await approveWikiDraft(draft.id)
+            const published = await publishWikiDraft(approved.id)
+            finalized.push(published.draft)
+          }
+          drafts = finalized
+        }
         wikiGenerated = drafts.length > 0
         wikiDraftCount = drafts.length
       }

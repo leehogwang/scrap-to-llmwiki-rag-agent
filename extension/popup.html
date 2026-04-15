@@ -45,6 +45,74 @@
         gap: 8px;
       }
 
+      .toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(15, 23, 42, 0.72);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .toggle-copy {
+        display: grid;
+        gap: 3px;
+      }
+
+      .toggle-copy strong {
+        font-size: 0.85rem;
+      }
+
+      .toggle-copy span {
+        color: #8ea3c2;
+        font-size: 0.75rem;
+        line-height: 1.4;
+      }
+
+      .switch {
+        position: relative;
+        width: 46px;
+        height: 28px;
+        flex: 0 0 auto;
+      }
+
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: rgba(71, 85, 105, 0.8);
+        transition: background 140ms ease;
+      }
+
+      .slider::before {
+        content: '';
+        position: absolute;
+        left: 3px;
+        top: 3px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: #f8fbff;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+        transition: transform 140ms ease;
+      }
+
+      .switch input:checked + .slider {
+        background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+      }
+
+      .switch input:checked + .slider::before {
+        transform: translateX(18px);
+      }
+
       .field label {
         font-size: 0.8rem;
         color: #d7e3f5;
@@ -144,6 +212,17 @@
         <label for="backendUrl">Backend URL</label>
         <input id="backendUrl" type="url" placeholder="http://222.116.135.238:3000" />
         <p class="help">로컬에서 쓰면 <code>http://localhost:3000</code>, 다른 PC에서 쓰면 서버 주소를 입력하세요.</p>
+      </div>
+
+      <div class="toggle">
+        <div class="toggle-copy">
+          <strong>메모 모드</strong>
+          <span>캡처 후 우측 팝업에서 사용자 메모를 남긴 뒤 저장함.</span>
+        </div>
+        <label class="switch" for="memoMode">
+          <input id="memoMode" type="checkbox" />
+          <span class="slider"></span>
+        </label>
       </div>
 
       <div class="actions">

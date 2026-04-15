@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClipWiki 시스템 아키텍처</title>
+    <style>
+      :root {
+        --bg: #f4f6f8;
+        --panel: #ffffff;
+        --text: #15202b;
+        --muted: #546372;
+        --line: #9eb1c4;
+        --accent: #2f5d8a;
+        --accent-soft: #e8f0f7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      }
+
+      .canvas {
+        position: relative;
+        width: 1800px;
+        height: 980px;
+        padding: 48px 56px 40px;
+        background:
+          radial-gradient(circle at top left, rgba(47, 93, 138, 0.08), transparent 32%),
+          linear-gradient(180deg, #f8fafb 0%, #eef2f5 100%);
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 40px;
+        letter-spacing: -0.03em;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font-size: 19px;
+        line-height: 1.5;
+        margin-bottom: 28px;
+      }
+
+      .flow {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 18px;
+        z-index: 1;
+      }
+
+      .box {
+        min-height: 246px;
+        background: rgba(255, 255, 255, 0.92);
+        border: 2px solid rgba(47, 93, 138, 0.16);
+        border-radius: 22px;
+        padding: 22px 20px 20px;
+        box-shadow: 0 16px 40px rgba(28, 45, 64, 0.08);
+        backdrop-filter: blur(8px);
+      }
+
+      .box h2 {
+        margin: 0 0 14px;
+        font-size: 24px;
+        letter-spacing: -0.03em;
+      }
+
+      .box ul {
+        margin: 0;
+        padding-left: 20px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.58;
+      }
+
+      .box li + li {
+        margin-top: 8px;
+      }
+
+      .pill {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .loop {
+        position: absolute;
+        left: 56px;
+        right: 56px;
+        bottom: 44px;
+        z-index: 1;
+        background: rgba(47, 93, 138, 0.1);
+        border: 2px solid rgba(47, 93, 138, 0.22);
+        border-radius: 24px;
+        padding: 20px 24px;
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 22px;
+        align-items: center;
+      }
+
+      .loop-title {
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--accent);
+      }
+
+      .loop-body {
+        color: #2b4258;
+        font-size: 18px;
+        line-height: 1.6;
+      }
+
+      svg {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        overflow: visible;
+      }
+
+      .arrow {
+        stroke: var(--line);
+        stroke-width: 4;
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="canvas">
+      <svg viewBox="0 0 1800 980" aria-hidden="true">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#9eb1c4"></path>
+          </marker>
+        </defs>
+        <path class="arrow" d="M 302 340 C 330 340, 340 340, 360 340" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 586 340 C 614 340, 624 340, 644 340" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 870 340 C 898 340, 908 340, 928 340" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 1154 340 C 1182 340, 1192 340, 1212 340" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 1438 340 C 1466 340, 1476 340, 1496 340" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 1510 515 C 1510 602, 1510 650, 1510 688" marker-end="url(#arrowhead)" />
+        <path class="arrow" d="M 290 688 C 290 636, 290 604, 290 560" marker-end="url(#arrowhead)" />
+      </svg>
+
+      <h1>ClipWiki 시스템 아키텍처</h1>
+      <div class="subtitle">
+        브라우저 스크랩, Function Calling 기반 위키 생성, Graphify 시각화를 하나의 축적형 RAG 워크플로우로 통합한 시스템 구조
+      </div>
+
+      <div class="flow">
+        <section class="box">
+          <h2>1. 사용자 상호작용</h2>
+          <ul>
+            <li>웹 페이지에서 Alt+Drag 기반 스크랩 수행</li>
+            <li>좌측 패널을 통한 질의응답 수행</li>
+            <li>위키 생성·갱신 및 Graphify 탐색 수행</li>
+          </ul>
+          <div class="pill">입력 시작점</div>
+        </section>
+
+        <section class="box">
+          <h2>2. 크롬 익스텐션</h2>
+          <ul>
+            <li>DOM, 이미지, 유튜브 카드 요소를 감지</li>
+            <li>스마트 스크랩 후보 청크를 수집</li>
+            <li>캡처 payload를 서버로 전송</li>
+          </ul>
+          <div class="pill">브라우저 계층</div>
+        </section>
+
+        <section class="box">
+          <h2>3. 앱 서버</h2>
+          <ul>
+            <li>입력 검증 및 moderation 절차를 수행</li>
+            <li>Function Calling 루프를 관리</li>
+            <li>Codex Auth 또는 OpenAI API를 호출</li>
+          </ul>
+          <div class="pill">제어 계층</div>
+        </section>
+
+        <section class="box">
+          <h2>4. 데이터·도구 계층</h2>
+          <ul>
+            <li>SQLite에 scrap, wiki, graph cache를 저장</li>
+            <li>Notion API를 통해 위키와 스크랩을 게시</li>
+            <li>YouTube transcript와 OCR 결과를 병합</li>
+          </ul>
+          <div class="pill">외부 연동</div>
+        </section>
+
+        <section class="box">
+          <h2>5. 생성 파이프라인</h2>
+          <ul>
+            <li>신규 스크랩을 기반으로 위키를 생성하거나 보강</li>
+            <li>TF-IDF 기반 스마트 스크랩 확장을 수행</li>
+            <li>Graphify를 재구축하고 놀라운 연결을 추론</li>
+          </ul>
+          <div class="pill">추론 계층</div>
+        </section>
+
+        <section class="box">
+          <h2>6. 사용자 경험</h2>
+          <ul>
+            <li>스크랩 축적에 따라 강화되는 RAG 구조 제공</li>
+            <li>위키, 그래프, 질의응답 간 순환 구조 제공</li>
+            <li>단발성 검색을 넘어서는 개인 지식층 형성</li>
+          </ul>
+          <div class="pill">출력 계층</div>
+        </section>
+      </div>
+
+      <section class="loop">
+        <div class="loop-title">Developer-in-the-Loop</div>
+        <div class="loop-body">
+          모델은 함수 스키마를 바탕으로 도구 호출을 제안하며, 서버는 이를 검증·실행한 후 결과를 다시 모델에 전달합니다.
+          사용자는 스크랩, 위키, Graphify를 통해 지식을 축적하며, 축적된 결과는 이후 질의의 RAG 품질을 점진적으로 향상시키는 피드백 루프를 형성합니다.
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

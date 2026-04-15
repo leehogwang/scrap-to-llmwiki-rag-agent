@@ -4,6 +4,7 @@ const input = document.getElementById('backendUrl')
 const saveButton = document.getElementById('saveButton')
 const testButton = document.getElementById('testButton')
 const openButton = document.getElementById('openButton')
+const memoModeInput = document.getElementById('memoMode')
 const statusNode = document.getElementById('status')
 
 function normalizeUrl(value) {
@@ -16,8 +17,9 @@ function setStatus(message, tone = '') {
 }
 
 async function loadConfig() {
-  const config = await chrome.storage.sync.get(['clipwikiBackendUrl'])
+  const config = await chrome.storage.sync.get(['clipwikiBackendUrl', 'clipwikiMemoMode'])
   input.value = config.clipwikiBackendUrl || DEFAULT_BACKEND
+  memoModeInput.checked = Boolean(config.clipwikiMemoMode)
   setStatus('Ready')
 }
 
@@ -28,7 +30,10 @@ async function saveConfig() {
     return
   }
 
-  await chrome.storage.sync.set({ clipwikiBackendUrl: backendUrl })
+  await chrome.storage.sync.set({
+    clipwikiBackendUrl: backendUrl,
+    clipwikiMemoMode: memoModeInput.checked
+  })
   setStatus(`Saved: ${backendUrl}`, 'ok')
 }
 
@@ -57,6 +62,12 @@ function openDashboard() {
   const backendUrl = normalizeUrl(input.value || DEFAULT_BACKEND)
   chrome.tabs.create({ url: backendUrl })
 }
+
+memoModeInput.addEventListener('change', () => {
+  void chrome.storage.sync.set({ clipwikiMemoMode: memoModeInput.checked }).then(() => {
+    setStatus(memoModeInput.checked ? '메모 모드가 켜졌습니다.' : '메모 모드가 꺼졌습니다.', 'ok')
+  })
+})
 
 saveButton.addEventListener('click', () => {
   void saveConfig()

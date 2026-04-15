@@ -1,9 +1,19 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { listScraps, listWikiDrafts, setSystemMetaValue } from '@/lib/server/db'
 import { rebuildGraphifyPayload } from '@/lib/server/graphify'
-import { createWikiDraftsFromSelection, type WikiDraftProgress } from '@/lib/server/openai'
+import {
+  approveWikiDraft,
+  createWikiDraftsFromSelection,
+  publishWikiDraft,
+  type WikiDraftProgress
+} from '@/lib/server/openai'
 
 export const runtime = 'nodejs'
+
+const requestSchema = z.object({
+  autoApprove: z.boolean().optional().default(false)
+})
 
 function getFreshUnassignedScraps() {
   const drafts = listWikiDrafts(1000)
@@ -34,8 +44,12 @@ function buildMessage(drafts: Array<{ title: string; generationAction?: 'created
   return `${drafts.length}개의 위키 초안을 처리했습니다.${summary ? ` (${summary})` : ''}`
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
+    const body = request.headers.get('content-type')?.includes('application/json')
+      ? await request.json().catch(() => ({}))
+      : {}
+    const parsed = requestSchema.parse(body)
     const scraps = getFreshUnassignedScraps()
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
@@ -59,9 +73,19 @@ export async function POST() {
             return
           }
 
-          const drafts = await createWikiDraftsFromSelection('', scraps, 'general', async (progress: WikiDraftProgress) => {
+          let drafts = await createWikiDraftsFromSelection('', scraps, 'general', async (progress: WikiDraftProgress) => {
             send({ type: 'progress', ...progress })
           })
+          const autoApproved = parsed.autoApprove && drafts.length > 0
+          if (autoApproved) {
+            const finalized = []
+            for (const draft of drafts) {
+              const approved = await approveWikiDraft(draft.id)
+              const published = await publishWikiDraft(approved.id)
+              finalized.push(published.draft)
+            }
+            drafts = finalized
+          }
           const graphPayload = await rebuildGraphifyPayload()
 
           setSystemMetaValue('wiki:last_manual_run_at', new Date().toISOString())
@@ -74,7 +98,8 @@ export async function POST() {
               message: buildMessage(drafts),
               draft: drafts[0] ?? null,
               drafts,
-              graphPayload
+              graphPayload,
+              autoApproved
             }
           })
         } catch (error) {

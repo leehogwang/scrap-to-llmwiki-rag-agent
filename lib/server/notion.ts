@@ -255,6 +255,7 @@ export async function createScrapPageInNotion(input: {
   })(databaseId)
 
   const children: BlockObjectRequest[] = [
+    ...(input.userNote ? [paragraphBlock(`메모: ${input.userNote}`)] : []),
     headingBlock('Source', 2),
     linkParagraphBlock('Original page', input.sourceUrl),
     paragraphBlock(`Source host: ${input.sourceHost}`),
@@ -280,11 +281,6 @@ export async function createScrapPageInNotion(input: {
             : '(No YouTube transcript captured)')
       )
     )
-  }
-
-  if (input.userNote) {
-    children.push(headingBlock('User note', 2))
-    children.push(paragraphBlock(input.userNote))
   }
 
   const page = await client.pages.create({

@@ -155,6 +155,7 @@ export interface WikiGenerationResponse {
   draft?: WikiDraft
   drafts?: WikiDraft[]
   graphPayload?: GraphifyPayload
+  autoApproved?: boolean
 }
 
 export type GraphifyNodeKind = 'scrap' | 'wiki' | 'claim' | 'concept'

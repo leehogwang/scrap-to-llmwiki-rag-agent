@@ -240,7 +240,8 @@ export default function KnowledgeAgentApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           forceGraph: options.forceGraph ?? false,
-          forceWiki: options.forceWiki ?? false
+          forceWiki: options.forceWiki ?? false,
+          autoApprove: autoApproveWiki
         })
       })
       const payload = await parseJsonResponse<{
@@ -250,6 +251,7 @@ export default function KnowledgeAgentApp() {
         wikiGenerated?: boolean
         wikiDraftCount?: number
         drafts?: WikiDraft[]
+        autoApproved?: boolean
       }>(response)
       if (!response.ok) {
         throw new Error(payload?.error ?? '자동 계산에 실패했습니다.')
@@ -263,15 +265,12 @@ export default function KnowledgeAgentApp() {
         await refresh(scrapQuery)
       }
 
-      // Auto-approve only the drafts created during this automation run.
-      if (payload?.wikiGenerated && autoApproveWiki && Array.isArray(payload.drafts) && payload.drafts.length > 0) {
-        await bulkApproveDrafts(payload.drafts.map((draft) => draft.id), { openAfter: false, appendMessage: false })
-      }
-
       if (appendMessage) {
         const parts = [
           payload?.graphRebuilt ? '그래프를 갱신했습니다.' : '',
-          payload?.wikiGenerated ? `위키 초안 ${payload.wikiDraftCount ?? 0}개를 자동 생성했습니다.` : ''
+          payload?.wikiGenerated
+            ? `${payload.autoApproved ? '위키 자동 승인 및 게시를 포함해' : '위키 초안'} ${payload.wikiDraftCount ?? 0}개를 처리했습니다.`
+            : ''
         ].filter(Boolean)
         if (parts.length > 0) {
           setMessages((current) => [...current, { role: 'system', text: parts.join(' ') }])
@@ -428,7 +427,7 @@ export default function KnowledgeAgentApp() {
       return
     }
 
-    if (autoApproveWiki) {
+    if (autoApproveWiki && drafts.some((draft) => draft.status === 'draft')) {
       await bulkApproveDrafts(drafts.map((draft) => draft.id), { openAfter: true, appendMessage })
       return
     }
@@ -457,7 +456,9 @@ export default function KnowledgeAgentApp() {
     setMessages((current) => [...current, { role: 'system', text: '위키 생성/갱신을 시작했습니다.' }])
     try {
       const response = await fetch('/api/wiki/auto-generate', {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoApprove: autoApproveWiki })
       })
       if (!response.ok) {
         const payload = await parseJsonResponse<{ error?: string }>(response)
@@ -1122,6 +1123,12 @@ export default function KnowledgeAgentApp() {
                   {detail.item.sourceUrl}
                 </a>
               </div>
+              {detail.item.userNote ? (
+                <div className='empty'>
+                  <strong>User note</strong>
+                  <div style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>{detail.item.userNote}</div>
+                </div>
+              ) : null}
               <div className='empty stack' style={{ gap: 14 }}>
                 <div>
                   <strong>Captured text</strong>

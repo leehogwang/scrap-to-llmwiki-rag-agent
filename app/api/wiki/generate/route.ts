@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getScrap, listScraps, listWikiDrafts } from '@/lib/server/db'
 import { rebuildGraphifyPayload } from '@/lib/server/graphify'
-import { createWikiDraftsFromSelection } from '@/lib/server/openai'
+import { approveWikiDraft, createWikiDraftsFromSelection, publishWikiDraft } from '@/lib/server/openai'
 
 export const runtime = 'nodejs'
 
 const requestSchema = z.object({
   topic: z.string().max(500).optional().default(''),
-  selectedScrapIds: z.array(z.string()).optional().default([])
+  selectedScrapIds: z.array(z.string()).optional().default([]),
+  autoApprove: z.boolean().optional().default(false)
 })
 
 function buildGenerationMessage(drafts: Array<{ title: string; generationAction?: 'created' | 'updated' }>, topic: string, skippedUsedCount: number) {
@@ -78,9 +79,19 @@ export async function POST(request: NextRequest) {
           }
 
           // Stream progress updates first, then emit one final payload for the client.
-          const drafts = await createWikiDraftsFromSelection(parsed.topic, scraps, 'general', async (progress) => {
+          let drafts = await createWikiDraftsFromSelection(parsed.topic, scraps, 'general', async (progress) => {
             send({ type: 'progress', ...progress })
           })
+          const autoApproved = parsed.autoApprove && drafts.length > 0
+          if (autoApproved) {
+            const finalized = []
+            for (const draft of drafts) {
+              const approved = await approveWikiDraft(draft.id)
+              const published = await publishWikiDraft(approved.id)
+              finalized.push(published.draft)
+            }
+            drafts = finalized
+          }
           // Rebuild Graphify after wiki generation so new wiki/claim/concept links are immediately visible.
           const graphPayload = await rebuildGraphifyPayload()
 
@@ -92,7 +103,8 @@ export async function POST(request: NextRequest) {
                 blocked: false,
                 message: buildGenerationMessage([], parsed.topic, skippedUsedCount),
                 drafts: [],
-                graphPayload
+                graphPayload,
+                autoApproved
               }
             })
             controller.close()
@@ -106,7 +118,8 @@ export async function POST(request: NextRequest) {
               message: buildGenerationMessage(drafts, parsed.topic, skippedUsedCount),
               draft,
               drafts,
-              graphPayload
+              graphPayload,
+              autoApproved
             }
           })
         } catch (error) {
