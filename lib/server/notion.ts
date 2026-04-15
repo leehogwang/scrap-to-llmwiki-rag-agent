@@ -155,6 +155,7 @@ function buildPropertyAssignments(input: {
 }) {
   return async (databaseId: string) => {
     const schema = await fetchDatabaseSchema(databaseId)
+    // Resolve property names dynamically so the integration survives user-side column renames in Notion.
     const properties: Record<string, any> = {
       [schema.titlePropertyName]: {
         title: [{ type: 'text', text: { content: truncateText(input.title, 180) } }]
@@ -225,6 +226,7 @@ export async function createScrapPageInNotion(input: {
   imageFiles: Array<{ buffer: Buffer; filename: string; mimeType: string; sourceUrl: string | null; caption: string }>
   screenshotFile?: { buffer: Buffer; filename: string; mimeType: string; caption: string } | null
 }) {
+  // Create the structured database row first, then append richer block content (links, transcript, images) below it.
   const client = notionClient()
   const databaseId = getRequiredEnv('NOTION_SCRAP_DATABASE_ID')
 

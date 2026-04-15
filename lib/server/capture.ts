@@ -44,6 +44,7 @@ export async function captureScrapToNotion(input: {
   screenshot?: File | null
   rect?: SelectionRect
 }) {
+  // Normalize browser-captured payload into one canonical scrap record before handing it off to Notion + SQLite.
   const sourceUrl = input.youtubeMeta?.videoUrl ?? input.pageUrl
   const pageTitle = normalizeText(input.youtubeMeta?.videoTitle || input.pageTitle) || 'Untitled page'
   const sourceHost = (() => {
@@ -64,6 +65,7 @@ export async function captureScrapToNotion(input: {
   })
 
   const transcript = input.youtubeMeta ? await fetchYouTubeTranscript(input.youtubeMeta.videoId) : { text: '', available: false, error: null as string | null }
+  // Fold semantic context, optional transcript, and OCR into one merged body so downstream wiki generation reads a single source of truth.
   const mergedText = [smartScrap.mergedText, transcript.text, ocrText]
     .filter(Boolean)
     .join('\n\n')
@@ -174,6 +176,7 @@ export async function captureScrapToNotion(input: {
     ? { ...screenshotAsset, notionFileId: notionResult.screenshotFileId }
     : null
 
+  // Mirror the Notion page into the local database so later RAG/graph rebuilds can run offline from persisted state.
   const scrap = upsertScrap({
     id: createId('scrap'),
     notionPageId: notionResult.pageId,

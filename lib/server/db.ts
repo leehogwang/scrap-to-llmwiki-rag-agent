@@ -185,6 +185,7 @@ export function upsertScrap(input: Omit<Scrap, 'createdAt' | 'updatedAt'>) {
   const db = ensureDb()
   const existing = db.prepare('SELECT created_at FROM scraps WHERE id = ?').get(input.id) as { created_at: string } | undefined
   const timestamp = nowIso()
+  // Keep graph/retrieval metadata nested in one JSON column so schema changes do not require table migrations.
   const metadata = {
     ...input.metadata,
     anchorChunks: input.anchorChunks,
@@ -291,6 +292,7 @@ export function summarizeScrap(scrap: Scrap): ScrapSummary {
 export function searchScrapDetails(query: string, limit = 10, tags: string[] = []) {
   const db = ensureDb()
   const wildcard = `%${query.toLowerCase()}%`
+  // SQLite substring search is intentionally simple here; semantic routing happens later in the model/tool layer.
   const rows = db.prepare(`
     SELECT *
     FROM scraps

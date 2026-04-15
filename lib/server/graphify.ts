@@ -451,6 +451,7 @@ async function inferSemanticEdges(nodes: GraphifyNode[], edges: GraphifyEdge[]) 
 }
 
 export async function rebuildGraphifyPayload() {
+  // Rebuild the graph from persisted scraps/wiki drafts so Graphify is always derivable from local state.
   const scraps = listScraps(500)
   const drafts = listWikiDrafts(500)
   const nodes = new Map<string, GraphifyNode>()
@@ -491,6 +492,7 @@ export async function rebuildGraphifyPayload() {
       }
     })
 
+    // Expand each wiki into concept and claim nodes so the graph can bridge raw scraps and summarized knowledge.
     draft.keyConcepts.forEach((concept) => {
       const normalized = normalizeText(concept).trim() || concept.trim().toLowerCase()
       if (!normalized) return
@@ -540,6 +542,7 @@ export async function rebuildGraphifyPayload() {
   })
 
   const conceptEntries = [...conceptNodeIds.entries()]
+  // Attach scraps back to concept nodes with lightweight lexical matching so raw evidence stays connected to wiki concepts.
   scraps.forEach((scrap) => {
     const scrapNodeId = `scrap:${scrap.id}`
     const scrapTokens = extractTokens(`${scrap.title}\n${scrap.pageTitle}\n${scrap.mergedText.slice(0, 2200)}`)
@@ -552,6 +555,7 @@ export async function rebuildGraphifyPayload() {
     })
   })
 
+  // Semantic edges are inferred after deterministic graph construction so LLM output augments, rather than replaces, extracted structure.
   const inferredEdges = await inferSemanticEdges([...nodes.values()], [...edges.values()])
   inferredEdges.forEach((edge) => {
     if (!edges.has(edge.id)) {
@@ -568,6 +572,7 @@ export async function rebuildGraphifyPayload() {
     .sort((left, right) => right.degree - left.degree)
     .slice(0, 5)
     .map((node) => ({ nodeId: node.id, label: node.label, degree: node.degree, kind: node.kind } satisfies GraphifyGodNode))
+  // Surprising connections are a second-pass wiki-to-wiki analysis layered on top of the rebuilt graph.
   const surprisingConnections = await inferSurprisingConnections(nodeList, edgeList, drafts)
   computeDegrees(nodeList, edgeList)
   godNodes = nodeList

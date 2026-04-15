@@ -193,6 +193,7 @@ export default function KnowledgeAgentApp() {
   useEffect(() => {
     const node = chatLogRef.current
     if (!node) return
+    // Keep the latest reply visible because chat answers and automation progress arrive asynchronously.
     node.scrollTo({
       top: node.scrollHeight,
       behavior: 'smooth'
@@ -203,6 +204,7 @@ export default function KnowledgeAgentApp() {
     setRefreshing(true)
     try {
       const queryParam = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : ''
+      // Refresh all three data views together so scraps, drafts, and the graph never drift out of sync in the UI.
       const [scrapResponse, wikiResponse, graphResponse] = await Promise.all([
         fetch(`/api/scraps${queryParam}`).then((res) => res.json()) as Promise<{ scraps: ScrapSummary[] }>,
         fetch('/api/wiki/drafts').then((res) => res.json()) as Promise<{ drafts: WikiDraftSummary[] }>,
@@ -261,6 +263,7 @@ export default function KnowledgeAgentApp() {
         await refresh(scrapQuery)
       }
 
+      // Auto-approve only the drafts created during this automation run.
       if (payload?.wikiGenerated && autoApproveWiki && Array.isArray(payload.drafts) && payload.drafts.length > 0) {
         await bulkApproveDrafts(payload.drafts.map((draft) => draft.id), { openAfter: false, appendMessage: false })
       }
@@ -327,6 +330,7 @@ export default function KnowledgeAgentApp() {
   }
 
   async function openGraphNode(node: GraphifyNode) {
+    // Raw scraps and wiki nodes reuse the primary detail panels; synthetic graph-only nodes resolve through the graph API.
     if (node.kind === 'scrap' && node.refId) {
       await openScrap(node.refId)
       return
@@ -572,6 +576,7 @@ export default function KnowledgeAgentApp() {
     const nextPrompt = prompt
     setPrompt('')
     setLoading(true)
+    // Ask always targets the full knowledge base; selection state is only used for bulk management actions.
     setMessages((current) => [...current, { role: 'user', text: nextPrompt }])
     try {
       const response = await fetch('/api/chat', {
@@ -597,6 +602,7 @@ export default function KnowledgeAgentApp() {
   async function saveChatMessageToScrap(index: number) {
     const target = messages[index]
     if (!target || target.role !== 'agent') return
+    // Persist the nearest preceding user turn with the assistant reply as one reusable Q/A scrap.
     const question = [...messages.slice(0, index)].reverse().find((message) => message.role === 'user')?.text?.trim() ?? ''
     const answer = target.text.trim()
     if (!question || !answer) return

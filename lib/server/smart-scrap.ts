@@ -207,6 +207,7 @@ export function enrichSmartScrap(input: {
   selectionRect?: SelectionRect | null
 }) {
   const normalizedSelectedText = normalizeWhitespace(input.selectedText)
+  // Canonicalize noisy DOM blocks before scoring so TF-IDF compares paragraph-like units instead of arbitrary fragments.
   const candidates = normalizeCandidates(input.candidateChunks)
 
   const anchorSource = candidates.filter((chunk) => chunk.intersectsSelection)
@@ -240,6 +241,7 @@ export function enrichSmartScrap(input: {
 
   const semanticChunks: ScrapChunk[] = []
   if (normalizedSelectedText.length >= MIN_SELECTION_LENGTH) {
+    // Use lexical similarity only as a local same-page context expansion, not as a cross-document knowledge signal.
     const tfIdfVectors = buildTfIdfVectors(normalizedSelectedText, candidates)
     const selectedVector = tfIdfVectors[0]
     const usedIds = new Set([

@@ -500,6 +500,7 @@
       detectYouTubeCaptureFromElement(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) ||
       detectYouTubeCapture(box)
     const isThumbnailCardCapture = youtubeMeta?.mode === 'thumbnail_card'
+    // Thumbnail-card captures intentionally skip ambient page text and rely on the resolved YouTube metadata instead.
     const candidateChunks = isThumbnailCardCapture ? [] : collectCandidateChunks(box)
     const imageCandidates = isThumbnailCardCapture ? [] : collectImageCandidates(box)
     const selectedText = isThumbnailCardCapture
@@ -520,6 +521,7 @@
 
     let screenshotBlob = null
     if (shouldUseScreenshot) {
+      // Canvas/PDF-like regions need a pixel fallback because the visible text is not reliably available from the DOM.
       const screenshotResponse = await sendRuntimeMessage({ type: 'clipwiki:capture-visible-tab' })
       if (!screenshotResponse?.error && screenshotResponse?.dataUrl) {
         screenshotBlob = await cropScreenshot(screenshotResponse.dataUrl, box)
@@ -549,6 +551,7 @@
       payload.youtubeMeta = youtubeMeta
     }
 
+    // Hand the browser-side capture bundle to the background script so saving can continue outside the page context.
     const saveResponse = await sendRuntimeMessage({
       type: 'clipwiki:save-capture',
       payload,

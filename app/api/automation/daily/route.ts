@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
 
     const latestScrapAt = latestCapturedAtIso()
     const lastWikiAutoRunAt = getSystemMetaValue(wikiAutoRunAtKey)
+    // Run wiki generation at most once per day, and only when new unassigned scraps arrived since the last auto run.
     const shouldRunWiki = parsed.forceWiki || (
       getSystemMetaValue(wikiAutoDateKey) !== today &&
       Boolean(latestScrapAt) &&
@@ -94,6 +95,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Rebuild the graph daily or immediately after wiki generation so Graphify and Ask stay in sync.
     const shouldRunGraph = parsed.forceGraph || getSystemMetaValue(graphAutoKey) !== today || wikiGenerated
     if (shouldRunGraph) {
       graphPayload = await rebuildGraphifyPayload()

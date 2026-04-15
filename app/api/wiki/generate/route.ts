@@ -77,9 +77,11 @@ export async function POST(request: NextRequest) {
             return
           }
 
+          // Stream progress updates first, then emit one final payload for the client.
           const drafts = await createWikiDraftsFromSelection(parsed.topic, scraps, 'general', async (progress) => {
             send({ type: 'progress', ...progress })
           })
+          // Rebuild Graphify after wiki generation so new wiki/claim/concept links are immediately visible.
           const graphPayload = await rebuildGraphifyPayload()
 
           const draft = drafts[0] ?? null

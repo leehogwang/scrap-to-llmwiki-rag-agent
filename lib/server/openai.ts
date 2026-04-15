@@ -766,6 +766,7 @@ export async function createWikiDraftsFromSelection(
     return []
   }
   const normalizedTopic = topic.trim()
+  // Topic provided => generate one focused draft. No topic => split scraps into topical groups.
   if (normalizedTopic) {
     await onProgress?.({ completed: 0, total: 1 })
     const draft = await createWikiDraftFromScraps(normalizedTopic, freshScraps, mode)
@@ -787,6 +788,10 @@ export async function createWikiDraftsFromSelection(
     await onProgress?.({ completed: drafts.length, total: groups.length, title: draft.title })
   }
   return drafts
+}
+
+function isParallelSafeTool(name: string) {
+  return name === 'search_scraps' || name === 'get_scrap_bundle' || name === 'search_wiki_drafts' || name === 'get_wiki_bundle'
 }
 
 async function executeTool(name: string, rawArgs: string) {
@@ -916,6 +921,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
     }
   } else {
     // --- 기존: Chat Completions API tool loop ---
+    // Start a fresh tool-loop transcript for this request; prior UI chat history is not replayed.
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: buildSystemPrompt() },
       {
@@ -924,6 +930,7 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       }
     ]
 
+    // Bound tool-calling rounds so malformed or indecisive responses cannot loop forever.
     for (let round = 0; round < 6; round += 1) {
       const response = await aiClient.chat.completions.create({
         model: defaultModel,
@@ -939,25 +946,53 @@ export async function runClipWikiChat(input: ChatRequestBody) {
       }
 
       if (message.tool_calls && message.tool_calls.length > 0) {
+        // Preserve the assistant's proposed tool calls, then append validated tool outputs.
         messages.push({
           role: 'assistant',
           content: message.content ?? '',
           tool_calls: message.tool_calls
         })
 
+        const readonlyCalls = message.tool_calls.filter((toolCall) => isParallelSafeTool(toolCall.function.name))
+
+        const readonlyResults = await Promise.all(
+          readonlyCalls.map(async (toolCall) => {
+            try {
+              const result = await executeTool(toolCall.function.name, toolCall.function.arguments)
+              return { toolCall, result }
+            } catch (error) {
+              return {
+                toolCall,
+                result: {
+                  error: error instanceof Error ? error.message : 'Tool execution failed',
+                  toolName: toolCall.function.name,
+                  providedArguments: toolCall.function.arguments
+                }
+              }
+            }
+          })
+        )
+
+        const readonlyResultMap = new Map(readonlyResults.map((entry) => [entry.toolCall.id, entry.result]))
+
+        // Execute read-only tools in parallel, but keep mutating tools serialized to avoid draft merge races.
         for (const toolCall of message.tool_calls) {
           let result: unknown
-          try {
-            result = await executeTool(toolCall.function.name, toolCall.function.arguments)
-            if (toolCall.function.name === 'create_wiki_draft') {
-              createdDrafts = Array.isArray(result) ? (result as WikiDraft[]) : [result as WikiDraft]
-              createdDraft = createdDrafts[0] ?? null
-            }
-          } catch (error) {
-            result = {
-              error: error instanceof Error ? error.message : 'Tool execution failed',
-              toolName: toolCall.function.name,
-              providedArguments: toolCall.function.arguments
+          if (readonlyResultMap.has(toolCall.id)) {
+            result = readonlyResultMap.get(toolCall.id)
+          } else {
+            try {
+              result = await executeTool(toolCall.function.name, toolCall.function.arguments)
+              if (toolCall.function.name === 'create_wiki_draft') {
+                createdDrafts = Array.isArray(result) ? (result as WikiDraft[]) : [result as WikiDraft]
+                createdDraft = createdDrafts[0] ?? null
+              }
+            } catch (error) {
+              result = {
+                error: error instanceof Error ? error.message : 'Tool execution failed',
+                toolName: toolCall.function.name,
+                providedArguments: toolCall.function.arguments
+              }
             }
           }
 
